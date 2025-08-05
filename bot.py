@@ -1,17 +1,20 @@
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, ContextTypes
+import math
 
-# مراحل مکالمه
+# --- مراحل مکالمه ---
 (
     CHOOSING,
+    # حالت وزن و قیمت
     WEIGHT_THICKNESS, WEIGHT_DIAMETER, WEIGHT_HEIGHT, WEIGHT_CONE_THICKNESS, WEIGHT_CONE_HEIGHT,
     WEIGHT_NUM_LEGS, WEIGHT_LEG_HEIGHT, WEIGHT_LEG_DIAMETER, WEIGHT_LEG_THICKNESS,
     WEIGHT_WASTE, WEIGHT_COST,
+    # حالت حجم/قطر/طول
     CALC_OPTION, VOLUME_DIAMETER, VOLUME_HEIGHT, VOLUME_CONE_HEIGHT, VOLUME_ORIENTATION,
     TARGET_VOLUME, TARGET_DIAMETER, TARGET_LENGTH
 ) = range(20)
 
-# شروع
+# --- شروع ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_keyboard = [["1. محاسبه وزن و قیمت مخزن", "2. محاسبه حجم/طول/قطر مخزن"]]
     await update.message.reply_text(
@@ -20,7 +23,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return CHOOSING
 
-# انتخاب حالت
+# --- انتخاب حالت ---
 async def choosing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     choice = update.message.text
     if choice.startswith("1"):
@@ -92,6 +95,7 @@ async def weight_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = context.user_data
     t["cost_per_kg"] = float(update.message.text)
 
+    # محاسبات وزن
     steel_density = 7850
     r = t["diameter"] / 2
     h = t["height"]
@@ -100,12 +104,12 @@ async def weight_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     h_cone = t["cone_height"] / 100
 
     # وزن استوانه
-    area_cylinder = 2 * 3.1416 * r * h
+    area_cylinder = 2 * math.pi * r * h
     weight_cylinder = area_cylinder * t_body * steel_density
 
     # وزن قیف‌ها
-    slant_height = (r**2 + h_cone**2) ** 0.5
-    area_cone = 3.1416 * r * slant_height
+    slant_height = math.sqrt(r**2 + h_cone**2)
+    area_cone = math.pi * r * slant_height
     weight_cones = 2 * area_cone * t_cone * steel_density if h_cone > 0 else 0
 
     # وزن پایه‌ها
@@ -113,10 +117,9 @@ async def weight_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     leg_thickness = t["leg_thickness"] / 1000
     leg_r_inner = leg_r_outer - leg_thickness
     leg_height = t["leg_height"] / 100
-    volume_leg = 3.1416 * (leg_r_outer**2 - leg_r_inner**2) * leg_height
+    volume_leg = math.pi * (leg_r_outer**2 - leg_r_inner**2) * leg_height
     weight_legs = t["num_legs"] * volume_leg * steel_density
 
-    # جمع
     total_weight = weight_cylinder + weight_cones + weight_legs
     total_weight_with_waste = total_weight * (1 + t["waste_percent"] / 100)
     price = total_weight_with_waste * t["cost_per_kg"]
@@ -143,6 +146,9 @@ async def calc_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice.startswith("3"):
         await update.message.reply_text("حجم مخزن (لیتر):")
         return TARGET_VOLUME
+    else:
+        await update.message.reply_text("گزینه نامعتبر است. دوباره انتخاب کنید.")
+        return CALC_OPTION
 
 async def volume_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["diameter"] = float(update.message.text)
@@ -162,18 +168,27 @@ async def volume_cone_height(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def volume_orientation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     orientation = update.message.text
     t = context.user_data
+
+    # بررسی اینکه مقادیر لازم وجود دارند
+    if "diameter" not in t or "height" not in t or "cone_height" not in t:
+        await update.message.reply_text("اطلاعات کافی وارد نشده است. دوباره از ابتدا وارد کنید /start")
+        return ConversationHandler.END
+
     r = t["diameter"] / 2
     h = t["height"]
     h_cone = t["cone_height"] / 100
 
     if orientation == "عمودی":
-        vol_cylinder = 3.1416 * r**2 * h
-        vol_cone = (1/3) * 3.1416 * r**2 * h_cone
+        vol_cylinder = math.pi * r**2 * h
+        vol_cone = (1/3) * math.pi * r**2 * h_cone
+        total_vol = vol_cylinder + vol_cone
+    elif orientation == "افقی":
+        vol_cylinder = math.pi * r**2 * h
+        vol_cone = 2 * ((1/3) * math.pi * r**2 * h_cone)
         total_vol = vol_cylinder + vol_cone
     else:
-        vol_cylinder = 3.1416 * r**2 * h
-        vol_cone = 2 * ((1/3) * 3.1416 * r**2 * h_cone)
-        total_vol = vol_cylinder + vol_cone
+        await update.message.reply_text("لطفاً فقط 'عمودی' یا 'افقی' وارد کنید.")
+        return VOLUME_ORIENTATION
 
     await update.message.reply_text(f"حجم کل: {round(total_vol * 1000, 2)} لیتر")
     return ConversationHandler.END
@@ -198,13 +213,13 @@ async def target_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ارتفاع هر قیف (سانتی‌متر):")
     return VOLUME_CONE_HEIGHT
 
-# ریست
+# --- ریست ---
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("بازنشانی شد. برای شروع دوباره /start را بزنید.")
     return ConversationHandler.END
 
-# اجرای برنامه
+# --- اجرای برنامه ---
 def main():
     app = Application.builder().token("8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY").build()
     conv = ConversationHandler(
