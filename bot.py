@@ -1,194 +1,217 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import logging
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes,
+    MessageHandler, filters, ConversationHandler
+)
 
-users_data = {}
+# فعال‌سازی لاگ برای دیباگ
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    users_data[chat_id] = {
-        "state": "waiting_thickness",
-        "thickness": None,
-        "diameter": None,
-        "height": None,
-        "cone_height_top": None,
-        "cone_height_bottom": None,
-        "cone_thickness": None,
-        "wage_per_kg": None,
-        "base_count": None,
-        "base_height_cm": None,
-        "base_diameter_inch": None,
-        "base_thickness_mm": None,
-        "waste_percent": None,
-    }
-    await update.message.reply_text("سلام! ضخامت بدنه مخزن به میلی‌متر رو وارد کن.")
+TOKEN = "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY"
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    text = update.message.text.strip()
+# مراحل گفتگو
+(
+    THICKNESS, DIAMETER, HEIGHT,
+    FUNNEL_HEIGHT, FUNNEL_THICKNESS,
+    BASE_COUNT, BASE_HEIGHT,
+    BASE_DIAMETER, BASE_THICKNESS,
+    WAGE, WASTE_PERCENT
+) = range(11)
 
-    if chat_id not in users_data:
-        await update.message.reply_text("لطفا ابتدا /start را بزنید.")
-        return
+# چگالی فولاد کیلوگرم بر متر مکعب
+STEEL_DENSITY = 7850
 
-    data = users_data[chat_id]
-    state = data["state"]
+# تابع محاسبه حجم استوانه
+def cylinder_volume(diameter_m, height_m):
+    radius = diameter_m / 2
+    return 3.1416 * radius**2 * height_m
 
-    def to_float(value):
-        try:
-            return float(value.replace(",", "."))
-        except:
-            return None
+# تابع محاسبه حجم مخروط
+def cone_volume(diameter_m, height_m):
+    radius = diameter_m / 2
+    return (1/3) * 3.1416 * radius**2 * height_m
 
-    if state == "waiting_thickness":
-        thickness = to_float(text)
-        if thickness is None or thickness <= 0:
-            await update.message.reply_text("ضخامت باید عدد مثبت باشد. دوباره وارد کن.")
-            return
-        data["thickness"] = thickness / 1000
-        data["state"] = "waiting_diameter"
-        await update.message.reply_text("قطر مخزن به متر را وارد کن.")
-        return
+# تابع محاسبه وزن لوله (پایه)
+def pipe_weight(length_m, outer_diameter_inch, thickness_mm):
+    # تبدیل اینچ به متر
+    outer_diameter_m = outer_diameter_inch * 0.0254
+    thickness_m = thickness_mm / 1000
+    inner_diameter_m = outer_diameter_m - 2 * thickness_m
+    cross_section_area = 3.1416 * (outer_diameter_m**2 - inner_diameter_m**2) / 4
+    volume = cross_section_area * length_m
+    weight = volume * STEEL_DENSITY
+    return weight
 
-    if state == "waiting_diameter":
-        diameter = to_float(text)
-        if diameter is None or diameter <= 0:
-            await update.message.reply_text("قطر باید عدد مثبت باشد. دوباره وارد کن.")
-            return
-        data["diameter"] = diameter
-        data["state"] = "waiting_height"
-        await update.message.reply_text("ارتفاع بدنه مخزن به متر را وارد کن.")
-        return
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text(
+        "سلام! برای محاسبه وزن و قیمت مخزن، ضخامت بدنه را به میلی‌متر وارد کنید:"
+    )
+    return THICKNESS
 
-    if state == "waiting_height":
-        height = to_float(text)
-        if height is None or height <= 0:
-            await update.message.reply_text("ارتفاع باید عدد مثبت باشد. دوباره وارد کن.")
-            return
-        data["height"] = height
-        data["state"] = "waiting_cone_height_top"
-        await update.message.reply_text("ارتفاع قیف بالای مخزن به سانتی‌متر را وارد کن.")
-        return
+async def thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val <= 0:
+            raise ValueError
+        context.user_data['thickness'] = val
+        await update.message.reply_text("قطر مخزن را به متر وارد کنید:")
+        return DIAMETER
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد مثبت معتبر وارد کنید.")
 
-    if state == "waiting_cone_height_top":
-        cone_height_top = to_float(text)
-        if cone_height_top is None or cone_height_top < 0:
-            await update.message.reply_text("ارتفاع قیف باید صفر یا مثبت باشد. دوباره وارد کن.")
-            return
-        data["cone_height_top"] = cone_height_top / 100
-        data["state"] = "waiting_cone_height_bottom"
-        await update.message.reply_text("ارتفاع قیف پایین مخزن به سانتی‌متر را وارد کن.")
-        return
+async def diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val <= 0:
+            raise ValueError
+        context.user_data['diameter'] = val
+        await update.message.reply_text("ارتفاع استوانه مخزن را به متر وارد کنید:")
+        return HEIGHT
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد مثبت معتبر وارد کنید.")
 
-    if state == "waiting_cone_height_bottom":
-        cone_height_bottom = to_float(text)
-        if cone_height_bottom is None or cone_height_bottom < 0:
-            await update.message.reply_text("ارتفاع قیف باید صفر یا مثبت باشد. دوباره وارد کن.")
-            return
-        data["cone_height_bottom"] = cone_height_bottom / 100
-        data["state"] = "waiting_cone_thickness"
-        await update.message.reply_text("ضخامت قیف به میلی‌متر را وارد کن.")
-        return
+async def height(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val <= 0:
+            raise ValueError
+        context.user_data['height'] = val
+        await update.message.reply_text("ارتفاع قیف کف و سقف مخزن را به سانتی‌متر وارد کنید (مثلاً 20):")
+        return FUNNEL_HEIGHT
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد مثبت معتبر وارد کنید.")
 
-    if state == "waiting_cone_thickness":
-        cone_thickness = to_float(text)
-        if cone_thickness is None or cone_thickness <= 0:
-            await update.message.reply_text("ضخامت قیف باید عدد مثبت باشد. دوباره وارد کن.")
-            return
-        data["cone_thickness"] = cone_thickness / 1000
-        data["state"] = "waiting_wage"
-        await update.message.reply_text("دستمزد ساخت به ازای هر کیلوگرم (تومان) را وارد کن.")
-        return
+async def funnel_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val < 0:
+            raise ValueError
+        context.user_data['funnel_height_cm'] = val
+        await update.message.reply_text("ضخامت قیف را به میلی‌متر وارد کنید:")
+        return FUNNEL_THICKNESS
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد غیرمنفی معتبر وارد کنید.")
 
-    if state == "waiting_wage":
-        wage = to_float(text)
-        if wage is None or wage <= 0:
-            await update.message.reply_text("دستمزد باید عدد مثبت باشد. دوباره وارد کن.")
-            return
-        data["wage_per_kg"] = wage
-        data["state"] = "waiting_base_count"
-        await update.message.reply_text("تعداد پایه‌ها را وارد کن.")
-        return
+async def funnel_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val <= 0:
+            raise ValueError
+        context.user_data['funnel_thickness_mm'] = val
+        await update.message.reply_text("تعداد پایه‌ها را وارد کنید (عدد صحیح، حداقل 0):")
+        return BASE_COUNT
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد مثبت معتبر وارد کنید.")
 
-    if state == "waiting_base_count":
-        base_count = to_float(text)
-        if base_count is None or base_count < 0 or int(base_count) != base_count:
-            await update.message.reply_text("تعداد پایه باید عدد صحیح و غیرمنفی باشد. دوباره وارد کن.")
-            return
-        data["base_count"] = int(base_count)
-        data["state"] = "waiting_base_height"
-        await update.message.reply_text("ارتفاع هر پایه به سانتی‌متر را وارد کن.")
-        return
+async def base_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = int(update.message.text)
+        if val < 0:
+            raise ValueError
+        context.user_data['base_count'] = val
+        if val == 0:
+            # اگر پایه نداریم بریم مرحله بعد
+            context.user_data['base_height'] = 0
+            context.user_data['base_diameter_inch'] = 0
+            context.user_data['base_thickness_mm'] = 0
+            await update.message.reply_text("دستمزد ساخت به ازای هر کیلوگرم را به تومان وارد کنید:")
+            return WAGE
+        await update.message.reply_text("ارتفاع هر پایه را به سانتی‌متر وارد کنید:")
+        return BASE_HEIGHT
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد صحیح غیرمنفی وارد کنید.")
 
-    if state == "waiting_base_height":
-        base_height = to_float(text)
-        if base_height is None or base_height <= 0:
-            await update.message.reply_text("ارتفاع پایه باید عدد مثبت باشد. دوباره وارد کن.")
-            return
-        data["base_height_cm"] = base_height
-        data["state"] = "waiting_base_diameter"
-        await update.message.reply_text("قطر پایه به اینچ را وارد کن.")
-        return
+async def base_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val <= 0:
+            raise ValueError
+        context.user_data['base_height_cm'] = val
+        await update.message.reply_text("قطر هر پایه را به اینچ وارد کنید:")
+        return BASE_DIAMETER
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد مثبت معتبر وارد کنید.")
 
-    if state == "waiting_base_diameter":
-        base_diameter = to_float(text)
-        if base_diameter is None or base_diameter <= 0:
-            await update.message.reply_text("قطر پایه باید عدد مثبت باشد. دوباره وارد کن.")
-            return
-        data["base_diameter_inch"] = base_diameter
-        data["state"] = "waiting_base_thickness"
-        await update.message.reply_text("ضخامت پایه به میلی‌متر را وارد کن.")
-        return
+async def base_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val <= 0:
+            raise ValueError
+        context.user_data['base_diameter_inch'] = val
+        await update.message.reply_text("ضخامت هر پایه را به میلی‌متر وارد کنید:")
+        return BASE_THICKNESS
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد مثبت معتبر وارد کنید.")
 
-    if state == "waiting_base_thickness":
-        base_thickness = to_float(text)
-        if base_thickness is None or base_thickness <= 0:
-            await update.message.reply_text("ضخامت پایه باید عدد مثبت باشد. دوباره وارد کن.")
-            return
-        data["base_thickness_mm"] = base_thickness / 1000
-        data["state"] = "waiting_waste_percent"
-        await update.message.reply_text("درصد ضایعات (پرتی) را وارد کن (مثلاً 10).")
-        return
+async def base_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val <= 0:
+            raise ValueError
+        context.user_data['base_thickness_mm'] = val
+        await update.message.reply_text("دستمزد ساخت به ازای هر کیلوگرم را به تومان وارد کنید:")
+        return WAGE
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد مثبت معتبر وارد کنید.")
 
-    if state == "waiting_waste_percent":
-        waste_percent = to_float(text)
-        if waste_percent is None or waste_percent < 0:
-            await update.message.reply_text("درصد پرتی باید عدد غیرمنفی باشد. دوباره وارد کن.")
-            return
-        data["waste_percent"] = waste_percent
+async def wage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val <= 0:
+            raise ValueError
+        context.user_data['wage'] = val
+        await update.message.reply_text("درصد ضریب پرتی (مثلاً 10 برای ۱۰٪) را وارد کنید:")
+        return WASTE_PERCENT
+    except ValueError:
+        await update.message.reply_text("لطفاً عدد مثبت معتبر وارد کنید.")
 
-        weight_cylinder = calc_cylinder_weight(
-            data["diameter"],
-            data["height"],
-            data["thickness"]
-        )
-        weight_cone_top = calc_cone_weight(
-            data["diameter"] / 2,
-            data["cone_height_top"],
-            data["cone_thickness"]
-        )
-        weight_cone_bottom = calc_cone_weight(
-            data["diameter"] / 2,
-            data["cone_height_bottom"],
-            data["cone_thickness"]
-        )
-        total_cone_weight = weight_cone_top + weight_cone_bottom
-        base_weight_total = 0
-        if data["base_count"] > 0:
-            base_weight_total = calc_pipe_weight(
-                data["base_height_cm"] / 100,
-                data["base_diameter_inch"] * 0.0254,
-                data["base_thickness_mm"]
-            ) * data["base_count"]
+async def waste_percent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text)
+        if val < 0:
+            raise ValueError
+        context.user_data['waste_percent'] = val
 
-        total_weight = weight_cylinder + total_cone_weight + base_weight_total
-        total_weight_with_waste = total_weight * (1 + data["waste_percent"] / 100)
-        price = total_weight_with_waste * data["wage_per_kg"]
+        # محاسبات
+        t = context.user_data['thickness'] / 1000  # میلی‌متر به متر
+        d = context.user_data['diameter']
+        h = context.user_data['height']
 
-        result_message = (
-            f"وزن استوانه: {round(weight_cylinder)} کیلوگرم\n"
-            f"وزن قیف بالا: {round(weight_cone_top)} کیلوگرم\n"
-            f"وزن قیف پایین: {round(weight_cone_bottom)} کیلوگرم\n"
-            f"وزن کل قیف‌ها: {round(total_cone_weight)} کیلوگرم\n"
-            f"وزن کل پایه‌ها: {round(base_weight_total)} کیلوگرم\n"
-            f"وزن کل مخزن (بدنه + قیف + پایه): {round(total_weight)} کیلوگرم\n"
-            f"وزن کل با
+        funnel_h = context.user_data['funnel_height_cm'] / 100  # سانتی‌متر به متر
+        funnel_t = context.user_data['funnel_thickness_mm'] / 1000
+
+        base_count = context.user_data['base_count']
+        base_h = context.user_data.get('base_height_cm', 0) / 100
+        base_d = context.user_data.get('base_diameter_inch', 0)
+        base_th = context.user_data.get('base_thickness_mm', 0)
+
+        wage = context.user_data['wage']
+        waste = context.user_data['waste_percent']
+
+        # وزن استوانه (بدنه)
+        cylinder_vol = cylinder_volume(d, h)
+        cylinder_weight = cylinder_vol * STEEL_DENSITY * t
+
+        # وزن قیف کف و سقف (دو مخروط)
+        cone_vol = cone_volume(d, funnel_h)
+        funnel_weight = cone_vol * STEEL_DENSITY * funnel_t * 2  # دو قیف (کف و سقف)
+
+        # وزن کل مخزن بدون پایه
+        total_tank_weight = cylinder_weight + funnel_weight
+
+        # وزن پایه‌ها
+        base_weight = 0
+        if base_count > 0:
+            base_weight_single = pipe_weight(base_h, base_d, base_th)
+            base_weight = base_weight_single * base_count
+
+        # وزن کل شامل پایه
+        total_weight = total_tank_weight + base_weight
+
+        # اعمال ضریب پرتی
+        total_weight_with_waste = total_weight * (
