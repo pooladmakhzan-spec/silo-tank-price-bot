@@ -1,146 +1,119 @@
-import math
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-(
-    THICKNESS_BODY,
-    THICKNESS_CONE,
-    DIAMETER,
-    HEIGHT_BODY,
-    HEIGHT_CONE_BOTTOM,
-    HEIGHT_CONE_TOP,
-    WAGE,
-) = range(7)
+# توکن ربات را اینجا وارد کن
+BOT_TOKEN = "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("سلام! ضخامت بدنه (میلی‌متر) را وارد کنید:")
-    return THICKNESS_BODY
+# دیکشنری برای ذخیره موقت داده‌های هر کاربر
+user_data = {}
 
-async def thickness_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# مراحل پرسش
+questions = [
+    "قطر مخزن را به متر وارد کنید:",
+    "ارتفاع استوانه مخزن را به متر وارد کنید:",
+    "ضخامت بدنه را به میلی‌متر وارد کنید:",
+    "ارتفاع قیف بالایی را به سانتی‌متر وارد کنید:",
+    "ارتفاع قیف پایینی را به سانتی‌متر وارد کنید:",
+    "ضخامت قیف‌ها را به میلی‌متر وارد کنید:",
+    "تعداد پایه‌ها را وارد کنید:",
+    "ارتفاع هر پایه را به سانتی‌متر وارد کنید:",
+    "قطر لوله پایه را به اینچ وارد کنید:",
+    "ضخامت لوله پایه را به میلی‌متر وارد کنید:",
+    "دستمزد ساخت به ازای هر کیلوگرم (تومان) را وارد کنید:"
+]
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_data[update.effective_user.id] = {"step": 0, "answers": []}
+    await update.message.reply_text("محاسبه قیمت مخزن و پایه‌ها آغاز شد.\n" + questions[0])
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_data.pop(update.effective_user.id, None)
+    await update.message.reply_text("داده‌های شما پاک شد. برای شروع دوباره دستور /start را وارد کنید.")
+
+async def handle_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in user_data:
+        await update.message.reply_text("لطفاً با دستور /start محاسبه را آغاز کنید.")
+        return
+
     try:
-        thickness_body = float(update.message.text)
-        context.user_data['thickness_body'] = thickness_body
-        await update.message.reply_text("ضخامت قیف‌ها (میلی‌متر) را وارد کنید:")
-        return THICKNESS_CONE
+        value = float(update.message.text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("لطفاً عدد معتبر وارد کنید.")
-        return THICKNESS_BODY
+        await update.message.reply_text("لطفاً فقط عدد وارد کنید.")
+        return
 
-async def thickness_cone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        thickness_cone = float(update.message.text)
-        context.user_data['thickness_cone'] = thickness_cone
-        await update.message.reply_text("قطر مخزن (متر) را وارد کنید:")
-        return DIAMETER
-    except ValueError:
-        await update.message.reply_text("لطفاً عدد معتبر وارد کنید.")
-        return THICKNESS_CONE
+    user_data[user_id]["answers"].append(value)
+    step = user_data[user_id]["step"] + 1
+    user_data[user_id]["step"] = step
 
-async def diameter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        diameter = float(update.message.text)
-        context.user_data['diameter'] = diameter
-        await update.message.reply_text("ارتفاع بدنه استوانه‌ای مخزن (متر) را وارد کنید:")
-        return HEIGHT_BODY
-    except ValueError:
-        await update.message.reply_text("لطفاً عدد معتبر وارد کنید.")
-        return DIAMETER
+    if step < len(questions):
+        await update.message.reply_text(questions[step])
+    else:
+        result = calculate(user_data[user_id]["answers"])
+        await update.message.reply_text(result)
+        user_data.pop(user_id)
 
-async def height_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        height_body = float(update.message.text)
-        context.user_data['height_body'] = height_body
-        await update.message.reply_text("ارتفاع قیف کف (سانتی‌متر) را وارد کنید:")
-        return HEIGHT_CONE_BOTTOM
-    except ValueError:
-        await update.message.reply_text("لطفاً عدد معتبر وارد کنید.")
-        return HEIGHT_BODY
+def calculate(data):
+    # داده‌ها
+    d_m, h_cyl, t_body_mm, h_cone_top_cm, h_cone_bottom_cm, t_cone_mm, n_legs, h_leg_cm, d_leg_inch, t_leg_mm, wage = data
 
-async def height_cone_bottom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        height_cone_bottom = float(update.message.text)
-        context.user_data['height_cone_bottom'] = height_cone_bottom
-        await update.message.reply_text("ارتفاع قیف سقف (سانتی‌متر) را وارد کنید:")
-        return HEIGHT_CONE_TOP
-    except ValueError:
-        await update.message.reply_text("لطفاً عدد معتبر وارد کنید.")
-        return HEIGHT_CONE_BOTTOM
+    # ثابت‌ها
+    density = 7850  # kg/m³
+    pi = 3.1416
 
-async def height_cone_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        height_cone_top = float(update.message.text)
-        context.user_data['height_cone_top'] = height_cone_top
-        await update.message.reply_text("دستمزد به ازای هر کیلوگرم (تومان) را وارد کنید:")
-        return WAGE
-    except ValueError:
-        await update.message.reply_text("لطفاً عدد معتبر وارد کنید.")
-        return HEIGHT_CONE_TOP
+    # تبدیل واحدها
+    r_m = d_m / 2
+    t_body = t_body_mm / 1000
+    h_cone_top = h_cone_top_cm / 100
+    h_cone_bottom = h_cone_bottom_cm / 100
+    t_cone = t_cone_mm / 1000
+    h_leg = h_leg_cm / 100
+    d_leg_outer = d_leg_inch * 0.0254
+    t_leg = t_leg_mm / 1000
 
-async def wage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        wage = float(update.message.text)
-        context.user_data['wage'] = wage
+    # محاسبه وزن بدنه استوانه
+    area_cyl = 2 * pi * r_m * h_cyl * t_body
+    weight_cyl = area_cyl * density
 
-        # محاسبات
-        thickness_body_m = context.user_data['thickness_body'] / 1000
-        thickness_cone_m = context.user_data['thickness_cone'] / 1000
-        diameter_m = context.user_data['diameter']
-        height_body_m = context.user_data['height_body']
-        height_cone_bottom_m = context.user_data['height_cone_bottom'] / 100
-        height_cone_top_m = context.user_data['height_cone_top'] / 100
-        radius_m = diameter_m / 2
-        density = 7850  # kg/m^3
+    # محاسبه وزن قیف‌ها (شعاع کوچک تقریباً صفر)
+    vol_cone_top = (pi * h_cone_top * (r_m ** 2)) / 3
+    vol_cone_bottom = (pi * h_cone_bottom * (r_m ** 2)) / 3
+    weight_cones = (vol_cone_top + vol_cone_bottom) * t_cone * density * (2 / (r_m))  # تخمین بر اساس ضخامت
 
-        lateral_area_cylinder = math.pi * diameter_m * height_body_m
-        weight_cylinder = lateral_area_cylinder * thickness_body_m * density
+    # وزن مخزن (بدنه + قیف‌ها)
+    weight_tank = weight_cyl + weight_cones
 
-        l_bottom = math.sqrt(radius_m**2 + height_cone_bottom_m**2)
-        lateral_area_cone_bottom = math.pi * radius_m * l_bottom
-        weight_cone_bottom = lateral_area_cone_bottom * thickness_cone_m * density
+    # محاسبه وزن پایه‌ها (لوله)
+    d_leg_inner = d_leg_outer - 2 * t_leg
+    area_leg = (pi / 4) * (d_leg_outer ** 2 - d_leg_inner ** 2)
+    weight_leg = area_leg * h_leg * density
+    weight_legs = weight_leg * n_legs
 
-        l_top = math.sqrt(radius_m**2 + height_cone_top_m**2)
-        lateral_area_cone_top = math.pi * radius_m * l_top
-        weight_cone_top = lateral_area_cone_top * thickness_cone_m * density
+    # وزن کلی بدون پرتی
+    total_weight = weight_tank + weight_legs
 
-        total_weight_no_scrap = weight_cylinder + weight_cone_bottom + weight_cone_top
-        total_weight_with_scrap = total_weight_no_scrap * 1.1
-        final_price = total_weight_with_scrap * wage
+    # وزن با پرتی ۱۰ درصد
+    total_weight_scrap = total_weight * 1.10
 
-        await update.message.reply_text(
-            f"وزن مخزن بدون پرتی: {total_weight_no_scrap:.2f} کیلوگرم\n"
-            f"وزن مخزن با احتساب ۱۰٪ ضریب پرتی: {total_weight_with_scrap:.2f} کیلوگرم\n"
-            f"قیمت نهایی مخزن: {final_price:,.0f} تومان"
-        )
-        return ConversationHandler.END
-    except ValueError:
-        await update.message.reply_text("لطفاً عدد معتبر وارد کنید.")
-        return WAGE
+    # قیمت نهایی
+    total_price = total_weight_scrap * wage
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("محاسبه لغو شد.")
-    return ConversationHandler.END
+    # پیام خروجی
+    result = (
+        f"وزن مخزن (بدنه + قیف‌ها): {weight_tank:.2f} کیلوگرم\n"
+        f"وزن پایه‌ها: {weight_legs:.2f} کیلوگرم\n"
+        f"وزن کلی بدون پرتی: {total_weight:.2f} کیلوگرم\n"
+        f"وزن کلی با احتساب ۱۰٪ پرتی: {total_weight_scrap:.2f} کیلوگرم\n"
+        f"قیمت نهایی: {total_price:,.0f} تومان"
+    )
+    return result
 
 def main():
-    application = ApplicationBuilder().token("8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY").build()
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_response))
+    app.run_polling()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
-        states={
-            THICKNESS_BODY: [MessageHandler(filters.TEXT & (~filters.COMMAND), thickness_body)],
-            THICKNESS_CONE: [MessageHandler(filters.TEXT & (~filters.COMMAND), thickness_cone)],
-            DIAMETER: [MessageHandler(filters.TEXT & (~filters.COMMAND), diameter)],
-            HEIGHT_BODY: [MessageHandler(filters.TEXT & (~filters.COMMAND), height_body)],
-            HEIGHT_CONE_BOTTOM: [MessageHandler(filters.TEXT & (~filters.COMMAND), height_cone_bottom)],
-            HEIGHT_CONE_TOP: [MessageHandler(filters.TEXT & (~filters.COMMAND), height_cone_top)],
-            WAGE: [MessageHandler(filters.TEXT & (~filters.COMMAND), wage)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)],
-    )
-
-    application.add_handler(conv_handler)
-
-    print("ربات در حال اجراست...")
-    application.run_polling()
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
