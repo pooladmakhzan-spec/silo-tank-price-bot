@@ -17,7 +17,7 @@ STEEL_DENSITY = 7850  # kg/m³
     P_DIA, P_HGT, P_BODY_T, P_CB_T, P_CT_T, P_CH, P_LC, P_LH, P_LD, P_LT, P_WASTE, P_WAGE,
     # Calc
     C_ORIENT, C_CH, C_CHHEIGHT, C_CHDIAM, C_CONE_H, C_PARAM1, C_PARAM2
-) = range(15)
+) = range(20)
 
 user_data = {}
 
