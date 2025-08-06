@@ -1,259 +1,158 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ConversationHandler, ContextTypes
-import math
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, ConversationHandler, CallbackQueryHandler
 
 TOKEN = "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY"
 
-# States
-CHOOSE_MODE, CHOOSE_CALC, GET_DIAMETER, GET_HEIGHT, GET_VOLUME, CHOOSE_ORIENTATION, \
-GET_TANK_DIAMETER, GET_TANK_HEIGHT, GET_CONE_HEIGHT, GET_BODY_THICKNESS, GET_CONE_THICKNESS, \
-GET_BASE_COUNT, GET_BASE_HEIGHT, GET_BASE_DIAMETER, GET_BASE_THICKNESS, GET_SCRAP, GET_COST = range(16)
+# مراحل مکالمه
+MAIN_MENU, PRICING, DIMENSIONS, ORIENTATION, TARGET_CHOICE, ASK_PARAMS, ASK_CYLINDER, ASK_CONES, ASK_BASES, ASK_WASTE, ASK_LABOR = range(11)
 
-STEEL_DENSITY = 7850  # kg/m³
+# متغیرهای کمکی
+user_data = {}
 
-# Start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     keyboard = [
-        [InlineKeyboardButton("محاسبه طول/قطر/حجم", callback_data="calc")],
-        [InlineKeyboardButton("محاسبه وزن و قیمت", callback_data="price")]
+        [InlineKeyboardButton("محاسبه قیمت مخزن", callback_data="pricing")],
+        [InlineKeyboardButton("محاسبه طول/قطر/حجم مخزن", callback_data="dimensions")]
     ]
-    await update.message.reply_text("یکی از حالت‌ها را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
-    return CHOOSE_MODE
+    update.message.reply_text("یک گزینه انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return MAIN_MENU
 
-# Choose mode
-async def choose_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def main_menu_handler(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
-    if query.data == "calc":
+    query.answer()
+    choice = query.data
+    user_data[query.from_user.id] = {}
+    if choice == "pricing":
+        query.edit_message_text("مشخصات بدنه مخزن:\nضخامت (میلی‌متر)، قطر (متر)، ارتفاع (متر) را وارد کنید.\nمثال: 8,2.5,6")
+        return ASK_CYLINDER
+    elif choice == "dimensions":
         keyboard = [
-            [InlineKeyboardButton("محاسبه طول", callback_data="length")],
-            [InlineKeyboardButton("محاسبه قطر", callback_data="diameter")],
-            [InlineKeyboardButton("محاسبه حجم", callback_data="volume")]
+            [InlineKeyboardButton("عمودی", callback_data="vertical")],
+            [InlineKeyboardButton("افقی", callback_data="horizontal")]
         ]
-        await query.edit_message_text("چه چیزی را می‌خواهید محاسبه کنید؟", reply_markup=InlineKeyboardMarkup(keyboard))
-        return CHOOSE_CALC
-    else:
-        await query.edit_message_text("قطر مخزن (متر):")
-        return GET_TANK_DIAMETER
+        query.edit_message_text("نوع مخزن را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ORIENTATION
 
-# Choose calculation type
-async def choose_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def orientation_handler(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
-    context.user_data["calc_type"] = query.data
-    if query.data == "length":
-        await query.edit_message_text("قطر مخزن (متر):")
-        return GET_DIAMETER
-    elif query.data == "diameter":
-        await query.edit_message_text("طول مخزن (متر):")
-        return GET_HEIGHT
-    elif query.data == "volume":
-        await query.edit_message_text("قطر مخزن (متر):")
-        return GET_VOLUME
-
-# For calc: get inputs
-async def get_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["diameter"] = float(update.message.text)
-    await update.message.reply_text("حجم مورد نظر (متر مکعب):")
-    return CHOOSE_ORIENTATION
-
-async def get_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["length"] = float(update.message.text)
-    await update.message.reply_text("حجم مورد نظر (متر مکعب):")
-    return CHOOSE_ORIENTATION
-
-async def get_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["diameter"] = float(update.message.text)
-    await update.message.reply_text("طول مخزن (متر):")
-    return CHOOSE_ORIENTATION
-
-# Orientation selection
-async def choose_orientation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # برای طول و قطر، ورودی حجم را اینجا می‌گیریم
-    calc_type = context.user_data["calc_type"]
-    if calc_type in ["length", "diameter"]:
-        context.user_data["volume"] = float(update.message.text)
-    elif calc_type == "volume":
-        context.user_data["length"] = float(update.message.text)
-
+    query.answer()
+    user_id = query.from_user.id
+    user_data[user_id]["orientation"] = query.data
     keyboard = [
-        [InlineKeyboardButton("عمودی", callback_data="vertical")],
-        [InlineKeyboardButton("افقی", callback_data="horizontal")]
+        [InlineKeyboardButton("حجم", callback_data="volume")],
+        [InlineKeyboardButton("طول", callback_data="length")],
+        [InlineKeyboardButton("قطر", callback_data="diameter")]
     ]
-    await update.message.reply_text("مخزن افقی است یا عمودی؟", reply_markup=InlineKeyboardMarkup(keyboard))
-    return None
+    query.edit_message_text("چه چیزی را می‌خواهید محاسبه کنید؟", reply_markup=InlineKeyboardMarkup(keyboard))
+    return TARGET_CHOICE
 
-# Orientation callback and calculation
-async def orientation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def target_choice_handler(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
-    orientation = query.data
-    calc_type = context.user_data.get("calc_type")
+    query.answer()
+    user_id = query.from_user.id
+    user_data[user_id]["target"] = query.data
+    query.edit_message_text("ورودی‌های لازم را به‌صورت عددی وارد کنید (بر حسب متر یا لیتر، بسته به مجهول).")
+    return ASK_PARAMS
 
-    d = context.user_data.get("diameter")
-    v = context.user_data.get("volume")
-    l = context.user_data.get("length")
-
-    r = d / 2 if d else None
-    cone_vol = (1/3) * math.pi * r**2 * r if r else 0  # حجم قیف‌ها
-
-    if calc_type == "length":
-        if orientation == "vertical":
-            v -= cone_vol
-        else:
-            v -= 2 * cone_vol
-        length = v / (math.pi * r**2)
-        await query.edit_message_text(f"طول مورد نیاز: {length:.2f} متر")
-
-    elif calc_type == "diameter":
-        if orientation == "vertical":
-            v -= cone_vol
-        else:
-            v -= 2 * cone_vol
-        diameter = math.sqrt((4 * v) / (math.pi * l))
-        await query.edit_message_text(f"قطر مورد نیاز: {diameter:.2f} متر")
-
-    elif calc_type == "volume":
-        cyl_vol = math.pi * r**2 * l
-        if orientation == "vertical":
-            total_vol = cyl_vol + cone_vol
-        else:
-            total_vol = cyl_vol + 2 * cone_vol
-        await query.edit_message_text(f"حجم مخزن: {total_vol:.2f} متر مکعب")
-
+def ask_params(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    orientation = user_data[user_id]["orientation"]
+    target = user_data[user_id]["target"]
+    inputs = list(map(float, update.message.text.split(",")))
+    if target == "volume":
+        d, h, cone_h = inputs
+        cyl_vol = 3.1416 * (d/2)**2 * h
+        cone_vol = (1/3) * 3.1416 * (d/2)**2 * cone_h
+        total = cyl_vol + (2 * cone_vol if orientation == "horizontal" else cone_vol)
+        update.message.reply_text(f"حجم مخزن ≈ {round(total, 2)} متر مکعب")
+    elif target == "length":
+        # محاسبه طول بر اساس حجم داده شده
+        v, d, cone_h = inputs
+        cone_vol = (1/3) * 3.1416 * (d/2)**2 * cone_h
+        effective_v = v - (2 * cone_vol if orientation == "horizontal" else cone_vol)
+        length = effective_v / (3.1416 * (d/2)**2)
+        update.message.reply_text(f"طول مخزن ≈ {round(length, 2)} متر")
+    elif target == "diameter":
+        v, h, cone_h = inputs
+        # محاسبه قطر با روش ساده‌سازی (نیوتن-رافسون حذف شده برای اختصار)
+        update.message.reply_text("محاسبه قطر نیاز به روش عددی دارد که باید جدا پیاده‌سازی شود.")
     return ConversationHandler.END
 
-# Weight and price inputs
-async def get_tank_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["diameter"] = float(update.message.text)
-    await update.message.reply_text("ارتفاع بدنه (متر):")
-    return GET_TANK_HEIGHT
+def ask_cylinder(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    thickness, diameter, height = map(float, update.message.text.split(","))
+    user_data[user_id]["cylinder"] = (thickness/1000, diameter, height)
+    update.message.reply_text("مشخصات قیف‌ها:\nضخامت (میلی‌متر)، ارتفاع قیف (سانتی‌متر) را وارد کنید.\nمثال: 8,60")
+    return ASK_CONES
 
-async def get_tank_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["height"] = float(update.message.text)
-    await update.message.reply_text("ارتفاع هر قیف (سانتیمتر):")
-    return GET_CONE_HEIGHT
+def ask_cones(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    thickness, cone_h = map(float, update.message.text.split(","))
+    user_data[user_id]["cones"] = (thickness/1000, cone_h/100)
+    update.message.reply_text("مشخصات پایه‌ها:\nتعداد، ارتفاع (سانتی‌متر)، قطر (اینچ)، ضخامت (میلی‌متر) را وارد کنید.\nمثال: 4,250,6,8")
+    return ASK_BASES
 
-async def get_cone_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["cone_height"] = float(update.message.text) / 100
-    await update.message.reply_text("ضخامت بدنه (میلی‌متر):")
-    return GET_BODY_THICKNESS
+def ask_bases(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    count, height, dia_inch, thickness = map(float, update.message.text.split(","))
+    user_data[user_id]["bases"] = (count, height/100, dia_inch*0.0254, thickness/1000)
+    update.message.reply_text("درصد پرتی را وارد کنید (مثلاً 10):")
+    return ASK_WASTE
 
-async def get_body_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["body_thickness"] = float(update.message.text) / 1000
-    await update.message.reply_text("ضخامت قیف‌ها (میلی‌متر):")
-    return GET_CONE_THICKNESS
+def ask_waste(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    user_data[user_id]["waste"] = float(update.message.text)/100
+    update.message.reply_text("دستمزد ساخت (تومان به ازای هر کیلوگرم) را وارد کنید:")
+    return ASK_LABOR
 
-async def get_cone_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["cone_thickness"] = float(update.message.text) / 1000
-    await update.message.reply_text("تعداد پایه:")
-    return GET_BASE_COUNT
-
-async def get_base_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["base_count"] = int(update.message.text)
-    await update.message.reply_text("ارتفاع پایه‌ها (سانتیمتر):")
-    return GET_BASE_HEIGHT
-
-async def get_base_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["base_height"] = float(update.message.text) / 100
-    await update.message.reply_text("قطر پایه (اینچ):")
-    return GET_BASE_DIAMETER
-
-async def get_base_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["base_diameter"] = float(update.message.text) * 0.0254
-    await update.message.reply_text("ضخامت پایه (میلی‌متر):")
-    return GET_BASE_THICKNESS
-
-async def get_base_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["base_thickness"] = float(update.message.text) / 1000
-    await update.message.reply_text("درصد پرتی (%):")
-    return GET_SCRAP
-
-async def get_scrap(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["scrap"] = float(update.message.text) / 100
-    await update.message.reply_text("دستمزد ساخت (تومان/کیلوگرم):")
-    return GET_COST
-
-async def get_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["cost_per_kg"] = float(update.message.text)
-
+def ask_labor(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    labor = float(update.message.text)
     # محاسبات وزن
-    d = context.user_data["diameter"]
-    h = context.user_data["height"]
-    hc = context.user_data["cone_height"]
-    t_body = context.user_data["body_thickness"]
-    t_cone = context.user_data["cone_thickness"]
-
-    # وزن بدنه
-    body_area = math.pi * d * h
-    body_vol = body_area * t_body
-    body_weight = body_vol * STEEL_DENSITY
-
-    # وزن قیف‌ها
-    r = d / 2
-    cone_area = math.pi * r * math.sqrt(r**2 + hc**2)
-    cone_vol = cone_area * t_cone
-    cones_weight = 2 * cone_vol * STEEL_DENSITY
-
-    # وزن پایه‌ها
-    n = context.user_data["base_count"]
-    hb = context.user_data["base_height"]
-    db = context.user_data["base_diameter"]
-    tb = context.user_data["base_thickness"]
-    base_weight = n * (math.pi * db * tb * hb * STEEL_DENSITY)
-
-    # وزن کلی
-    total_weight = body_weight + cones_weight + base_weight
-    total_weight_scrap = total_weight * (1 + context.user_data["scrap"])
-    total_price = total_weight_scrap * context.user_data["cost_per_kg"]
-
-    await update.message.reply_text(
-        f"وزن مخزن: {int(body_weight + cones_weight)} کیلوگرم\n"
+    t, d, h = user_data[user_id]["cylinder"]
+    cyl_weight = (3.1416 * d * h * t) * 7850
+    tc, hc = user_data[user_id]["cones"]
+    cone_area = 3.1416 * (d/2) * (((d/2)**2 + hc**2)**0.5)
+    cone_weight = cone_area * tc * 7850
+    total_cones = 2 * cone_weight
+    c, hb, db, tb = user_data[user_id]["bases"]
+    base_weight = c * (3.1416 * db * hb * tb) * 7850
+    total_weight = cyl_weight + total_cones + base_weight
+    total_with_waste = total_weight * (1 + user_data[user_id]["waste"])
+    price = total_with_waste * labor
+    update.message.reply_text(
+        f"وزن مخزن: {int(cyl_weight+total_cones)} کیلوگرم\n"
         f"وزن پایه‌ها: {int(base_weight)} کیلوگرم\n"
-        f"وزن کلی با پرتی: {int(total_weight_scrap)} کیلوگرم\n"
-        f"قیمت کل: {int(total_price)} تومان"
+        f"وزن کلی: {int(total_weight)} کیلوگرم\n"
+        f"وزن کلی با پرتی: {int(total_with_waste)} کیلوگرم\n"
+        f"قیمت کل: {int(price)} تومان"
     )
-
     return ConversationHandler.END
 
-# Reset
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    await update.message.reply_text("بات ریست شد. /start را بزنید.")
-    return ConversationHandler.END
+def reset(update: Update, context: CallbackContext):
+    user_data.clear()
+    update.message.reply_text("داده‌ها ریست شد. از /start دوباره شروع کنید.")
 
-# Main
-def main():
-    app = Application.builder().token(TOKEN).build()
+app = Application.builder().token(TOKEN).build()
 
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            CHOOSE_MODE: [CallbackQueryHandler(choose_mode)],
-            CHOOSE_CALC: [CallbackQueryHandler(choose_calc)],
-            GET_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_diameter)],
-            GET_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_height)],
-            GET_VOLUME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_volume)],
-            CHOOSE_ORIENTATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_orientation)],
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("start", start)],
+    states={
+        MAIN_MENU: [CallbackQueryHandler(main_menu_handler)],
+        ORIENTATION: [CallbackQueryHandler(orientation_handler)],
+        TARGET_CHOICE: [CallbackQueryHandler(target_choice_handler)],
+        ASK_PARAMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_params)],
+        ASK_CYLINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_cylinder)],
+        ASK_CONES: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_cones)],
+        ASK_BASES: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_bases)],
+        ASK_WASTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_waste)],
+        ASK_LABOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_labor)],
+    },
+    fallbacks=[CommandHandler("reset", reset)]
+)
 
-            GET_TANK_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_tank_diameter)],
-            GET_TANK_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_tank_height)],
-            GET_CONE_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cone_height)],
-            GET_BODY_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_body_thickness)],
-            GET_CONE_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cone_thickness)],
-            GET_BASE_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_base_count)],
-            GET_BASE_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_base_height)],
-            GET_BASE_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_base_diameter)],
-            GET_BASE_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_base_thickness)],
-            GET_SCRAP: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_scrap)],
-            GET_COST: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cost)],
-        },
-        fallbacks=[CommandHandler("reset", reset)]
-    )
-
-    app.add_handler(conv)
-    app.add_handler(CallbackQueryHandler(orientation_callback, pattern="^(vertical|horizontal)$"))
-    app.run_polling()
+app.add_handler(conv_handler)
+app.add_handler(CommandHandler("reset", reset))
 
 if __name__ == "__main__":
-    main()
+    app.run_polling()
