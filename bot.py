@@ -9,13 +9,13 @@ TOKEN = "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY"
 
 # استیت‌ها
 MAIN_MENU, PRICING_DIAMETER, PRICING_HEIGHT, PRICING_THICKNESS, PRICING_CONE_HEIGHT, \
-PRICING_CONE_TOP_THICK, PRICING_CONE_BOTTOM_THICK, PRICING_LEG_COUNT, PRICING_LEG_HEIGHT, \
-PRICING_LEG_DIAMETER, PRICING_LEG_THICKNESS, PRICING_WASTE, PRICING_WAGE, \
-MODE_SELECTION, CALC_CHOICE, CALC_DIAMETER, CALC_HEIGHT, CALC_VOLUME = range(18)
+PRICING_LEG_COUNT, PRICING_LEG_HEIGHT, PRICING_LEG_DIAMETER, PRICING_LEG_THICKNESS, \
+PRICING_WASTE, PRICING_WAGE, \
+MODE_SELECTION, CALC_CHOICE, CALC_DIAMETER, CALC_HEIGHT, CALC_VOLUME = range(16)
 
 user_data = {}
 
-# ⬅️ شروع
+# شروع
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("💰 قیمت‌گذاری مخزن", callback_data="pricing")],
@@ -24,7 +24,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("یکی از گزینه‌های زیر را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
     return MAIN_MENU
 
-# ⬅️ منوی اصلی
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -40,7 +39,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("مخزن افقی است یا عمودی؟", reply_markup=InlineKeyboardMarkup(keyboard))
         return MODE_SELECTION
 
-# ⬅️ انتخاب حالت عمودی یا افقی
+# انتخاب حالت عمودی یا افقی برای محاسبات طول/قطر/حجم
 async def mode_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -53,7 +52,6 @@ async def mode_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("چه چیزی را می‌خواهید محاسبه کنید؟", reply_markup=InlineKeyboardMarkup(keyboard))
     return CALC_CHOICE
 
-# ⬅️ انتخاب نوع محاسبه
 async def calc_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -69,25 +67,30 @@ async def calc_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("قطر مخزن (متر) را وارد کنید:")
         return CALC_DIAMETER
 
-# ⬅️ دریافت ورودی محاسبه اول
+# دریافت داده‌های حالت محاسبه طول/قطر/حجم
 async def get_calc_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     action = user_data[user_id]["action"]
+    orientation = user_data[user_id]["orientation"]
 
-    if action == "length":
-        user_data[user_id]["diameter"] = float(update.message.text)
+    if action == "length":  # محاسبه طول
+        diameter = float(update.message.text)
+        user_data[user_id]["diameter"] = diameter
         await update.message.reply_text("حجم مورد نظر (لیتر) را وارد کنید:")
         return CALC_VOLUME
-    elif action == "diameter":
-        user_data[user_id]["length"] = float(update.message.text)
+
+    elif action == "diameter":  # محاسبه قطر
+        length = float(update.message.text)
+        user_data[user_id]["length"] = length
         await update.message.reply_text("حجم مورد نظر (لیتر) را وارد کنید:")
         return CALC_VOLUME
-    elif action == "volume":
-        user_data[user_id]["diameter"] = float(update.message.text)
+
+    elif action == "volume":  # محاسبه حجم
+        diameter = float(update.message.text)
+        user_data[user_id]["diameter"] = diameter
         await update.message.reply_text("طول مخزن (متر) را وارد کنید:")
         return CALC_HEIGHT
 
-# ⬅️ دریافت ورودی دوم برای محاسبه
 async def get_calc_second_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     action = user_data[user_id]["action"]
@@ -96,38 +99,50 @@ async def get_calc_second_input(update: Update, context: ContextTypes.DEFAULT_TY
     if action == "length":
         volume_liter = float(update.message.text)
         volume_m3 = volume_liter / 1000
-        d = user_data[user_id]["diameter"]
-        r = d / 2
-        cone_h = 0.5
-        cone_vol = (math.pi * r ** 2 * cone_h) / 3
-        usable_volume = volume_m3 - (cone_vol if orientation == "vertical" else 2 * cone_vol)
-        length = usable_volume / (math.pi * r ** 2)
+        diameter = user_data[user_id]["diameter"]
+        radius = diameter / 2
+        # حجم قیف‌ها
+        cone_height = 0.5  # مثال: 50cm
+        cone_vol = (math.pi * radius ** 2 * cone_height) / 3
+        if orientation == "vertical":
+            usable_volume = volume_m3 - cone_vol
+        else:
+            usable_volume = volume_m3 - (2 * cone_vol)
+        length = usable_volume / (math.pi * radius ** 2)
         await update.message.reply_text(f"طول مخزن ≈ {length:.2f} متر")
         return ConversationHandler.END
 
     elif action == "diameter":
+        volume_liter = float(update.message.text)
+        volume_m3 = volume_liter / 1000
+        length = user_data[user_id]["length"]
+        # باید با روش نیوتن-رافسون برای قطر حل کنیم (فعلاً ساده می‌گیریم)
         await update.message.reply_text("این بخش در حال توسعه است.")
         return ConversationHandler.END
 
     elif action == "volume":
         length = float(update.message.text)
-        d = user_data[user_id]["diameter"]
-        r = d / 2
-        cone_h = 0.5
-        cone_vol = (math.pi * r ** 2 * cone_h) / 3
-        total_vol = (math.pi * r ** 2 * length) + (cone_vol if orientation == "vertical" else 2 * cone_vol)
+        diameter = user_data[user_id]["diameter"]
+        radius = diameter / 2
+        cone_height = 0.5
+        cone_vol = (math.pi * radius ** 2 * cone_height) / 3
+        if orientation == "vertical":
+            total_vol = (math.pi * radius ** 2 * length) + cone_vol
+        else:
+            total_vol = (math.pi * radius ** 2 * length) + 2 * cone_vol
         await update.message.reply_text(f"حجم مخزن ≈ {total_vol * 1000:.0f} لیتر")
         return ConversationHandler.END
 
-# 🧮 قیمت‌گذاری: مرحله به مرحله
+# قیمت‌گذاری: دریافت داده‌ها مرحله به مرحله
 async def pricing_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data[update.message.from_user.id] = {"diameter": float(update.message.text)}
+    user_id = update.message.from_user.id
+    user_data[user_id] = {"diameter": float(update.message.text)}
     await update.message.reply_text("ارتفاع بدنه (متر) را وارد کنید:")
     return PRICING_HEIGHT
 
 async def pricing_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data[update.message.from_user.id]["height"] = float(update.message.text)
-    await update.message.reply_text("ضخامت ورق بدنه (میلی‌متر) را وارد کنید:")
+    await update.message.reply_text("ضخامت ورق (میلی‌متر) را وارد کنید:")
     return PRICING_THICKNESS
 
 async def pricing_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -137,17 +152,7 @@ async def pricing_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pricing_cone_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data[update.message.from_user.id]["cone_height"] = float(update.message.text)
-    await update.message.reply_text("ضخامت قیف بالا (میلی‌متر) را وارد کنید:")
-    return PRICING_CONE_TOP_THICK
-
-async def pricing_cone_top_thick(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data[update.message.from_user.id]["cone_top_thickness"] = float(update.message.text)
-    await update.message.reply_text("ضخامت قیف پایین (میلی‌متر) را وارد کنید:")
-    return PRICING_CONE_BOTTOM_THICK
-
-async def pricing_cone_bottom_thick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("تعداد پایه‌ها را وارد کنید:")
-    user_data[update.message.from_user.id]["cone_bottom_thickness"] = float(update.message.text)
     return PRICING_LEG_COUNT
 
 async def pricing_leg_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -181,10 +186,8 @@ async def pricing_wage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     d = user_data[uid]["diameter"]
     h = user_data[uid]["height"]
-    t_body = user_data[uid]["thickness"] / 1000
+    t = user_data[uid]["thickness"] / 1000
     ch = user_data[uid]["cone_height"] / 100
-    t_cone_top = user_data[uid]["cone_top_thickness"] / 1000
-    t_cone_bot = user_data[uid]["cone_bottom_thickness"] / 1000
     legs = user_data[uid]["legs"]
     leg_h = user_data[uid]["leg_height"] / 100
     leg_d = (user_data[uid]["leg_diameter"] * 2.54) / 100
@@ -197,32 +200,32 @@ async def pricing_wage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # وزن بدنه
     body_area = 2 * math.pi * r * h
-    body_weight = body_area * t_body * density
+    body_weight = body_area * t * density
 
-    # وزن قیف‌ها
-    slant = math.sqrt(r**2 + ch**2)
-    cone_area = math.pi * r * slant
-    cone_weight = cone_area * density * (t_cone_top + t_cone_bot)
+    # قیف‌ها
+    cone_area = math.pi * r * math.sqrt(r**2 + ch**2)
+    cone_weight = 2 * cone_area * t * density
 
-    # وزن پایه‌ها
+    tank_weight = body_weight + cone_weight
+
+    # پایه‌ها
     leg_weight = legs * (2 * math.pi * (leg_d / 2) * leg_h * leg_t * density)
 
-    total_weight = body_weight + cone_weight + leg_weight
+    total_weight = tank_weight + leg_weight
     total_with_waste = total_weight * (1 + waste / 100)
     price = total_with_waste * wage
 
-    msg = (
-        f"✅ وزن بدنه: {int(body_weight)} کیلوگرم\n"
-        f"✅ وزن قیف‌ها: {int(cone_weight)} کیلوگرم\n"
-        f"✅ وزن پایه‌ها: {int(leg_weight)} کیلوگرم\n"
-        f"✅ وزن کل: {int(total_weight)} کیلوگرم\n"
-        f"✅ وزن با پرتی: {int(total_with_waste)} کیلوگرم\n"
-        f"✅ قیمت کل: {int(price):,} تومان"
-    )
+    msg = f"""
+✅ وزن مخزن: {int(tank_weight)} کیلوگرم
+✅ وزن پایه‌ها: {int(leg_weight)} کیلوگرم
+✅ وزن کل: {int(total_weight)} کیلوگرم
+✅ وزن با پرتی: {int(total_with_waste)} کیلوگرم
+✅ قیمت کل: {int(price):,} تومان
+"""
     await update.message.reply_text(msg)
     return ConversationHandler.END
 
-# 🎯 اجرای برنامه
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -240,8 +243,6 @@ def main():
             PRICING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pricing_height)],
             PRICING_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, pricing_thickness)],
             PRICING_CONE_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pricing_cone_height)],
-            PRICING_CONE_TOP_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, pricing_cone_top_thick)],
-            PRICING_CONE_BOTTOM_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, pricing_cone_bottom_thick)],
             PRICING_LEG_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pricing_leg_count)],
             PRICING_LEG_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pricing_leg_height)],
             PRICING_LEG_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, pricing_leg_diameter)],
