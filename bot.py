@@ -502,7 +502,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def main():
     """اجرای اصلی بات تلگرام."""
     # توکن ربات خود را در اینجا قرار دهید
-    application = ApplicationBuilder().token("YOUR_TELEGRAM_BOT_TOKEN").build()
+    application = ApplicationBuilder().token("8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY").build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
