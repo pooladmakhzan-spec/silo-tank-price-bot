@@ -970,7 +970,10 @@ def main():
 
     application.add_handler(conv_handler)
     print("Bot is running...")
-    application.run_polling(drop_pending_updates=True)
+# Remove any existing webhook to avoid conflicts
+application.bot.delete_webhook()
+application.run_polling(drop_pending_updates=True)
+
 
 if __name__ == '__main__':
     main()
