@@ -970,7 +970,7 @@ def main():
 
     application.add_handler(conv_handler)
     print("Bot is running...")
-    application.run_polling()
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
