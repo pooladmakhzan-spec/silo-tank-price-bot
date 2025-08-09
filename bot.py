@@ -1,5 +1,3 @@
-
-
 import math
 import os
 from flask import Flask, request
@@ -78,7 +76,7 @@ def _calculate_pipe_weight(length_m: float, diameter_inch: float, thickness_mm: 
     thickness_m = thickness_mm / 1000
     inner_r_m = outer_r_m - thickness_m
     
-    if inner_r_m < 0: inner_r_m = 0 # جلوگیری از شعاع منفی
+    if inner_r_m < 0: inner_r_m = 0
     
     volume_m3 = math.pi * (outer_r_m**2 - inner_r_m**2) * length_m
     return volume_m3 * STEEL_DENSITY_KG_M3
@@ -106,12 +104,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Clear any previous data
     context.user_data.clear()
     
     if update.message:
         await update.message.reply_text("سلام! لطفاً نوع محاسبات را انتخاب کنید:", reply_markup=reply_markup)
-    else: # If coming from a callback query (e.g. back button)
+    else:
         query = update.callback_query
         await query.answer()
         await query.edit_message_text("سلام! لطفاً نوع محاسبات را انتخاب کنید:", reply_markup=reply_markup)
@@ -178,11 +175,11 @@ async def select_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     elif component == 'silo':
         if task_choice == "task_pricing":
-            context.user_data['silo_p'] = {} # Initialize pricing data for silo
+            context.user_data['silo_p'] = {}
             await query.edit_message_text("قیمت‌گذاری سیلو انتخاب شد.\n\nلطفاً قطر سیلو (cm) را وارد کنید:")
             return SILO_PRICING_DIAMETER
         elif task_choice == "task_calc":
-            context.user_data['silo_c'] = {} # Initialize calc data for silo
+            context.user_data['silo_c'] = {}
             keyboard = [
                 [InlineKeyboardButton("ظرفیت (تُن)", callback_data='capacity')],
                 [InlineKeyboardButton("ارتفاع استوانه (cm)", callback_data='length')],
@@ -628,7 +625,6 @@ async def silo_calc_get_capacity(update: Update, context: ContextTypes.DEFAULT_T
     try:
         val = float(update.message.text)
         if val <= 0: raise ValueError
-        # Convert tons to kg, then to m^3
         context.user_data['silo_c']['volume_m3'] = (val * 1000) / CEMENT_DENSITY_KG_M3
         await update.message.reply_text("✅ بسیار خب. ارتفاع قیف پایین (cm) را وارد کنید:")
         return SILO_AWAITING_BOTTOM_H
@@ -729,9 +725,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # بخش اصلی برنامه
 # ==============================================================================
 
-def main() -> None:
-    """Start the bot."""
-    # Define a ConversationHandler for all the logic
+def main() -> ApplicationBuilder:
+    """Start the bot and return the application instance."""
+    application = ApplicationBuilder().token(TOKEN).build()
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -784,21 +781,19 @@ def main() -> None:
 # اجرای برنامه
 # ==============================================================================
 
-# ایجاد نمونه Flask و Telegram
 app = Flask(__name__)
-application = main()
+# Get the Application instance from the main function
+telegram_application = main()
 
-# تعریف وب‌هوک برای Flask
 @app.route(f"/{TOKEN}", methods=["POST"])
 async def webhook_handler():
     """هندلر وب‌هوک برای پردازش به‌روزرسانی‌ها از تلگرام."""
     if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.process_update(update)
+        update = Update.de_json(request.get_json(force=True), telegram_application.bot)
+        await telegram_application.process_update(update)
     return "ok"
 
 if __name__ == "__main__":
-    # تنظیم وب‌هوک به صورت یکبار و اجرای سرور
-    application.bot.set_webhook(url=WEBHOOK_URL)
+    telegram_application.bot.set_webhook(url=WEBHOOK_URL)
     PORT = int(os.environ.get("PORT", "8080"))
     app.run(host="0.0.0.0", port=PORT)
