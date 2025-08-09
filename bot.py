@@ -2,7 +2,7 @@ import math
 import os
 from flask import Flask, request
 from telegram import Update
-from telegram.ext import Application
+from telegram.ext import ApplicationBuilder
 (
     ApplicationBuilder,
     CommandHandler,
