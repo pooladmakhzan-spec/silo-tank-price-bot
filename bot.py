@@ -1,3 +1,5 @@
+
+
 import math
 import os
 from flask import Flask, request
@@ -15,8 +17,8 @@ from telegram.ext import (
 # ==============================================================================
 # ثابت‌های عمومی
 # ==============================================================================
-STEEL_DENSITY_KG_M3 = 7850      # چگالی فولاد (kg/m^3)
-CEMENT_DENSITY_KG_M3 = 1600     # چگالی سیمان فله (kg/m^3)
+STEEL_DENSITY_KG_M3 = 7850        # چگالی فولاد (kg/m^3)
+CEMENT_DENSITY_KG_M3 = 1600       # چگالی سیمان فله (kg/m^3)
 INCH_TO_M = 0.0254
 END = ConversationHandler.END
 
@@ -43,7 +45,6 @@ SELECTING_COMPONENT, SELECTING_TASK = range(2)
     TANK_AWAITING_LENGTH, TANK_AWAITING_VOLUME, TANK_AWAITING_BOTTOM_H,
     TANK_AWAITING_TOP_H
 ) = range(2, 24)
-
 
 # --- وضعیت‌های مربوط به سیلو (Silo) ---
 (
@@ -716,221 +717,31 @@ async def silo_perform_calculation(update: Update, context: ContextTypes.DEFAULT
     context.user_data.clear()
     return END
 
-
-# --- قیمت‌گذاری سیلو ---
-# This is a long chain of functions. Each one asks for a piece of data.
-
-async def silo_pricing_step(update: Update, context: ContextTypes.DEFAULT_TYPE, field: str, prompt: str, next_state: int, current_state: int, is_int: bool = False) -> int:
-    """A generic function to handle a pricing step."""
-    try:
-        value_str = update.message.text
-        value = int(value_str) if is_int else float(value_str)
-        if value < 0: raise ValueError
-        context.user_data['silo_p'][field] = value
-        await update.message.reply_text(prompt)
-        return next_state
-    except (ValueError, TypeError):
-        error_msg = f"خطا: لطفاً یک عدد {'صحیح' if is_int else ''} معتبر وارد کنید."
-        await update.message.reply_text(error_msg)
-        return current_state
-
-# We define a handler for each step to call the generic function
-async def silo_pricing_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'diameter_cm', "✅ قطر سیلو. ارتفاع استوانه (cm) را وارد کنید:", SILO_PRICING_HEIGHT, SILO_PRICING_DIAMETER)
-async def silo_pricing_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'height_cm', "✅ ارتفاع استوانه. ضخامت استوانه (mm) را وارد کنید:", SILO_PRICING_THICKNESS_CYL, SILO_PRICING_HEIGHT)
-async def silo_pricing_thickness_cyl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'thickness_cyl_mm', "✅ ضخامت استوانه. ارتفاع قیف پایین (cm) را وارد کنید:", SILO_PRICING_CONE_BOTTOM_H, SILO_PRICING_THICKNESS_CYL)
-async def silo_pricing_cone_bottom_h(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'cone_bottom_h_cm', "✅ ارتفاع قیف پایین. ضخامت قیف پایین (mm) را وارد کنید:", SILO_PRICING_CONE_BOTTOM_THICK, SILO_PRICING_CONE_BOTTOM_H)
-async def silo_pricing_cone_bottom_thick(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'cone_bottom_thick_mm', "✅ ضخامت قیف پایین. ارتفاع قیف بالا (cm) را وارد کنید:", SILO_PRICING_CONE_TOP_H, SILO_PRICING_CONE_BOTTOM_THICK)
-async def silo_pricing_cone_top_h(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'cone_top_h_cm', "✅ ارتفاع قیف بالا. ضخامت قیف بالا (mm) را وارد کنید:", SILO_PRICING_CONE_TOP_THICK, SILO_PRICING_CONE_TOP_H)
-async def silo_pricing_cone_top_thick(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'cone_top_thick_mm', "✅ ضخامت قیف بالا. ارتفاع نردبان بدون حفاظ (m) را وارد کنید:", SILO_PRICING_LADDER_NO_CAGE_H, SILO_PRICING_CONE_TOP_THICK)
-async def silo_pricing_ladder_no_cage_h(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'ladder_no_cage_h_m', "✅ نردبان بدون حفاظ. ارتفاع نردبان با حفاظ (m) را وارد کنید:", SILO_PRICING_LADDER_CAGE_H, SILO_PRICING_LADDER_NO_CAGE_H)
-async def silo_pricing_ladder_cage_h(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'ladder_cage_h_m', "✅ نردبان با حفاظ. تعداد پایه‌ها را وارد کنید (برای محاسبه دقیق بادبند و کلاف، ۴ فرض می‌شود):", SILO_PRICING_SUPPORT_COUNT, SILO_PRICING_LADDER_CAGE_H)
-async def silo_pricing_support_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'support_count', "✅ تعداد پایه‌ها. ارتفاع هر پایه (cm) را وارد کنید:", SILO_PRICING_SUPPORT_HEIGHT, SILO_PRICING_SUPPORT_COUNT, is_int=True)
-async def silo_pricing_support_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'support_height_cm', "✅ ارتفاع پایه‌ها. قطر هر پایه (inch) را وارد کنید:", SILO_PRICING_SUPPORT_DIAMETER, SILO_PRICING_SUPPORT_HEIGHT)
-async def silo_pricing_support_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'support_diameter_inch', "✅ قطر پایه‌ها. ضخامت هر پایه (mm) را وارد کنید:", SILO_PRICING_SUPPORT_THICKNESS, SILO_PRICING_SUPPORT_DIAMETER)
-async def silo_pricing_support_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'support_thickness_mm', "✅ ضخامت پایه‌ها. تعداد ردیف کلاف‌ها را وارد کنید:", SILO_PRICING_KALLAF_ROWS, SILO_PRICING_SUPPORT_THICKNESS)
-async def silo_pricing_kallaf_rows(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'kallaf_rows', "✅ تعداد ردیف کلاف. قطر لوله کلاف (inch) را وارد کنید:", SILO_PRICING_KALLAF_DIAMETER, SILO_PRICING_KALLAF_ROWS, is_int=True)
-async def silo_pricing_kallaf_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'kallaf_diameter_inch', "✅ قطر کلاف. ضخامت لوله کلاف (mm) را وارد کنید:", SILO_PRICING_KALLAF_THICKNESS, SILO_PRICING_KALLAF_DIAMETER)
-async def silo_pricing_kallaf_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'kallaf_thickness_mm', "✅ ضخامت کلاف. قطر لوله بادبند (inch) را وارد کنید:", SILO_PRICING_BADBAND_DIAMETER, SILO_PRICING_KALLAF_THICKNESS)
-async def silo_pricing_badband_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'badband_diameter_inch', "✅ قطر بادبند. ضخامت لوله بادبند (mm) را وارد کنید:", SILO_PRICING_BADBAND_THICKNESS, SILO_PRICING_BADBAND_DIAMETER)
-async def silo_pricing_badband_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'badband_thickness_mm', "✅ ضخامت بادبند. درصد پرتی ورق (%) را وارد کنید:", SILO_PRICING_WASTE, SILO_PRICING_BADBAND_THICKNESS)
-async def silo_pricing_waste(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await silo_pricing_step(update, context, 'waste_percent', "✅ درصد پرتی. دستمزد ساخت (تومان به ازای هر کیلوگرم) را وارد کنید:", SILO_PRICING_WAGE, SILO_PRICING_WASTE)
-
-async def silo_pricing_final_calculate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """محاسبه نهایی وزن و قیمت سیلو و ارسال نتیجه."""
-    try:
-        wage_per_kg = float(update.message.text)
-        if wage_per_kg < 0: raise ValueError
-        data = context.user_data['silo_p']
-
-        # --- ۱. محاسبه وزن بدنه و قیف‌ها ---
-        d_m = data['diameter_cm'] / 100
-        radius_m = d_m / 2
-        h_cyl_m = data['height_cm'] / 100
-        t_cyl_m = data['thickness_cyl_mm'] / 1000
-        h_cb_m = data['cone_bottom_h_cm'] / 100
-        t_cb_m = data['cone_bottom_thick_mm'] / 1000
-        h_ct_m = data['cone_top_h_cm'] / 100
-        t_ct_m = data['cone_top_thick_mm'] / 1000
-
-        weight_cyl = (math.pi * d_m * h_cyl_m) * t_cyl_m * STEEL_DENSITY_KG_M3
-        
-        weight_cb = 0
-        if h_cb_m > 0:
-            slant_cb = math.sqrt(radius_m**2 + h_cb_m**2)
-            area_cb = math.pi * radius_m * slant_cb
-            weight_cb = area_cb * t_cb_m * STEEL_DENSITY_KG_M3
-
-        weight_ct = 0
-        if h_ct_m > 0:
-            slant_ct = math.sqrt(radius_m**2 + h_ct_m**2)
-            area_ct = math.pi * radius_m * slant_ct
-            weight_ct = area_ct * t_ct_m * STEEL_DENSITY_KG_M3
-        
-        weight_body = weight_cyl + weight_cb + weight_ct
-
-        # --- ۲. محاسبه وزن نردبان‌ها ---
-        # فرض: پله‌ها به عرض ۴۰ سانتی‌متر و با فاصله ۳۰ سانتی‌متر از هم هستند
-        # لوله عمودی: قطر ۳ سانت (۱.۱۸ اینچ)، ضخامت ۲ میل. پله: قطر ۲ سانت (۰.۷۸ اینچ)، ضخامت ۲ میل
-        weight_ladder_no_cage = 0
-        if data['ladder_no_cage_h_m'] > 0:
-            h = data['ladder_no_cage_h_m']
-            num_rungs = math.ceil(h / 0.30)
-            weight_vertical_pipes = _calculate_pipe_weight(h * 2, 1.18, 2)
-            weight_rungs = _calculate_pipe_weight(num_rungs * 0.4, 0.78, 2)
-            weight_ladder_no_cage = weight_vertical_pipes + weight_rungs
-
-        # فرض: حفاظ از ۳ تسمه عمودی و حلقه‌هایی با قطر ۷۰ سانت در هر ۱.۵ متر تشکیل شده
-        # تسمه: عرض ۴ سانت، ضخامت ۳ میل
-        weight_ladder_cage = 0
-        if data['ladder_cage_h_m'] > 0:
-            h = data['ladder_cage_h_m']
-            num_rungs = math.ceil(h / 0.30)
-            weight_vertical_pipes = _calculate_pipe_weight(h * 2, 1.18, 2)
-            weight_rungs = _calculate_pipe_weight(num_rungs * 0.4, 0.78, 2)
-            
-            num_hoops = math.ceil(h / 1.5)
-            hoop_len = math.pi * 0.7 
-            weight_cage_straps = _calculate_strap_weight(h * 3, 4, 3) # 3 vertical straps
-            weight_cage_hoops = _calculate_strap_weight(num_hoops * hoop_len, 4, 3)
-            weight_ladder_cage = weight_vertical_pipes + weight_rungs + weight_cage_straps + weight_cage_hoops
-
-        # --- ۳. محاسبه وزن پایه‌ها ---
-        weight_supports = 0
-        if data['support_count'] > 0:
-            h = data['support_height_cm'] / 100
-            d_inch = data['support_diameter_inch']
-            t_mm = data['support_thickness_mm']
-            weight_one_support = _calculate_pipe_weight(h, d_inch, t_mm)
-            weight_supports = weight_one_support * data['support_count']
-
-        # --- ۴. محاسبه وزن کلاف و بادبند ---
-        # فرض کلیدی: محاسبات برای ۴ پایه است.
-        weight_kallaf = 0
-        weight_badband = 0
-        if data['kallaf_rows'] > 0:
-            # فاصله بین دو پایه مجاور در یک مربع محاط در دایره به قطر d_m
-            dist_between_legs = d_m * math.sin(math.pi / 4) * math.sqrt(2) # Simplified to d_m / sqrt(2) * sqrt(2) = d_m
-            dist_between_legs = d_m / math.sqrt(2) # Correct calculation for inscribed square side
-
-            # کلاف: ۴ لوله افقی در هر ردیف
-            len_kallaf_per_row = 4 * dist_between_legs
-            weight_kallaf_per_row = _calculate_pipe_weight(len_kallaf_per_row, data['kallaf_diameter_inch'], data['kallaf_thickness_mm'])
-            weight_kallaf = weight_kallaf_per_row * data['kallaf_rows']
-
-            # بادبند: ۸ عدد ضربدری بین هر دو ردیف کلاف
-            if data['kallaf_rows'] > 1:
-                len_badband = math.sqrt(dist_between_legs**2 + 3**2) # فاصله عمودی کلاف‌ها ۳ متر است
-                weight_one_badband = _calculate_pipe_weight(len_badband, data['badband_diameter_inch'], data['badband_thickness_mm'])
-                num_badband_sets = data['kallaf_rows'] - 1
-                weight_badband = weight_one_badband * 8 * num_badband_sets
-
-        # --- ۵. محاسبه نهایی ---
-        total_weight = (weight_body + weight_ladder_no_cage + weight_ladder_cage + 
-                        weight_supports + weight_kallaf + weight_badband)
-        weight_with_waste = total_weight * (1 + data['waste_percent'] / 100)
-        total_price = weight_with_waste * wage_per_kg
-
-        response = "📊 **نتایج قیمت‌گذاری سیلو** 📊\n\n"
-        response += f"🔹 وزن بدنه و قیف‌ها: `{int(weight_body)}` کیلوگرم\n"
-        response += f"🔹 وزن نردبان بدون حفاظ: `{int(weight_ladder_no_cage)}` کیلوگرم\n"
-        response += f"🔹 وزن نردبان با حفاظ: `{int(weight_ladder_cage)}` کیلوگرم\n"
-        response += f"🔹 وزن پایه‌ها: `{int(weight_supports)}` کیلوگرم\n"
-        response += f"🔹 وزن کلاف‌ها: `{int(weight_kallaf)}` کیلوگرم\n"
-        response += f"🔹 وزن بادبندها: `{int(weight_badband)}` کیلوگرم\n"
-        response += "-----------------------------------\n"
-        response += f"🔸 **وزن کلی (بدون پرتی):** `{int(total_weight)}` کیلوگرم\n"
-        response += f"🔸 **وزن کلی (با پرتی):** `{int(weight_with_waste)}` کیلوگرم\n\n"
-        response += f"💰 **قیمت کل (با دستمزد):** `{int(total_price):,}` تومان"
-        
-        await update.message.reply_text(response, parse_mode='Markdown')
-        context.user_data.clear()
-        return END
-
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً دستمزد را به صورت یک عدد معتبر وارد کنید.")
-        return SILO_PRICING_WAGE
-    except Exception as e:
-        await update.message.reply_text(f"یک خطای غیرمنتظره در محاسبات رخ داد: {e}")
-        context.user_data.clear()
-        return END
-
-
 # ==============================================================================
-# تابع لغو و تنظیمات اصلی برنامه
+# مدیریت خطاهای کلی
 # ==============================================================================
-app = flask[async]
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error and send a user-friendly message."""
     print(f"Update '{update}' caused error '{context.error}'")
 
-# تعریف برنامه تلگرام
-application = ApplicationBuilder().token(TOKEN).build()
+# ==============================================================================
+# بخش اصلی برنامه
+# ==============================================================================
 
-# 2. تعریف مسیر وب‌هوک با استفاده از دکوراتور Flask
-@app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook_handler():
-    """هندلر وب‌هوک برای پردازش به‌روزرسانی‌ها از تلگرام."""
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.process_update(update)
-    return "ok"
-
-# تابع اصلی برای تنظیم هندلرها
 def main() -> None:
     """Start the bot."""
     # Define a ConversationHandler for all the logic
     conv_handler = ConversationHandler(
-        # ... (کد ConversationHandler شما در اینجا قرار می‌گیرد، بدون تغییر)
         entry_points=[CommandHandler("start", start)],
         states={
-            # ... (تمام stateهای شما)
             SELECTING_COMPONENT: [
                 CallbackQueryHandler(select_component, pattern="^component_(tank|silo)$")
             ],
             SELECTING_TASK: [
                 CallbackQueryHandler(select_task, pattern="^task_(pricing|calc)$|^back_to_start$")
             ],
-            # ... (سایر stateها)
+            # --- TANK Handlers ---
             TANK_PRICING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_diameter)],
             TANK_PRICING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_height)],
             TANK_PRICING_THICKNESS_CYL: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_thickness_cyl)],
@@ -952,26 +763,42 @@ def main() -> None:
             TANK_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_bottom_h)],
             TANK_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_top_h)],
             
-            # --- Silo Calc Handlers ---
+            # --- SILO Handlers ---
             SILO_CALC_CHOICE: [CallbackQueryHandler(silo_calc_choice, pattern="^(capacity|length|diameter)$")],
             SILO_AWAITING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_diameter)],
             SILO_AWAITING_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_length)],
             SILO_AWAITING_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_capacity)],
             SILO_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_bottom_h)],
             SILO_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_top_h)],
+            
+            # TODO: Add handlers for SILO pricing when ready
         },
         fallbacks=[CommandHandler("start", start)],
     )
 
     application.add_handler(conv_handler)
     application.add_error_handler(error_handler)
+    return application
 
+# ==============================================================================
 # اجرای برنامه
+# ==============================================================================
+
+# ایجاد نمونه Flask و Telegram
+app = Flask(__name__)
+application = main()
+
+# تعریف وب‌هوک برای Flask
+@app.route(f"/{TOKEN}", methods=["POST"])
+async def webhook_handler():
+    """هندلر وب‌هوک برای پردازش به‌روزرسانی‌ها از تلگرام."""
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+    return "ok"
+
 if __name__ == "__main__":
-    # ابتدا وب‌هوک را تنظیم می‌کنیم
-    # URL دقیق وب‌هوک را به تلگرام اعلام می‌کنیم
+    # تنظیم وب‌هوک به صورت یکبار و اجرای سرور
     application.bot.set_webhook(url=WEBHOOK_URL)
-    
-    # سپس وب‌سرور را راه‌اندازی می‌کنیم تا به‌روزرسانی‌ها را دریافت کند
-    PORT = int(os.environ.get("PORT", "8000"))
+    PORT = int(os.environ.get("PORT", "8080"))
     app.run(host="0.0.0.0", port=PORT)
