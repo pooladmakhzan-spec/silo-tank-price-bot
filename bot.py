@@ -25,7 +25,6 @@ END = ConversationHandler.END
 # حتماً این توکن را با توکن واقعی خود جایگزین کنید یا آن را در Render به عنوان متغیر محیطی (Environment Variable) تنظیم کنید.
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY")
 WEBHOOK_URL = f"https://silo-tank-price-bot.onrender.com/{TOKEN}"
-
 # ==============================================================================
 # تعریف وضعیت‌های مکالمه (States)
 # ==============================================================================
