@@ -14,7 +14,7 @@ from telegram.ext import (
 # ثابت‌های عمومی
 # ==============================================================================
 STEEL_DENSITY_KG_M3 = 7850      # چگالی فولاد (kg/m^3)
-CEMENT_DENSITY_KG_M3 = 1550     # چگالی سیمان فله (kg/m^3)
+CEMENT_DENSITY_KG_M3 = 1600     # چگالی سیمان فله (kg/m^3)
 INCH_TO_M = 0.0254
 END = ConversationHandler.END
 
