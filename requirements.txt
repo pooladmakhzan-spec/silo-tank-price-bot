@@ -1,4 +1,3 @@
 gunicorn
 python-telegram-bot
 Flask
-requests  # This is a sample line, assuming requests was the issue
