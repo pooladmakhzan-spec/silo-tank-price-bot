@@ -2,3 +2,4 @@ python-telegram-bot[ext]
 uvicorn
 starlette
 httpx
+Flask
