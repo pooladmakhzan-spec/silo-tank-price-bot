@@ -719,7 +719,7 @@ def main() -> Application:
 # ==============================================================================
 
 app = Flask(__name__)
-TOKEN = "توکن ربات"
+TOKEN = "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY"
 telegram_application = Application.builder().token(TOKEN).build()
 
 @app.before_first_request
