@@ -1,5 +1,2 @@
-python-telegram-bot[ext]
-uvicorn
-starlette
-httpx
-Flask
+python-telegram-bot
+flask
