@@ -968,8 +968,10 @@ def main() -> None:
 
 # اجرای برنامه
 if __name__ == "__main__":
-    main()
-    PORT = int(os.environ.get("PORT", "8080"))
-    # تنظیم وب‌هوک به صورت یکبار و اجرای سرور
+    # ابتدا وب‌هوک را تنظیم می‌کنیم
+    # URL دقیق وب‌هوک را به تلگرام اعلام می‌کنیم
     application.bot.set_webhook(url=WEBHOOK_URL)
+    
+    # سپس وب‌سرور را راه‌اندازی می‌کنیم تا به‌روزرسانی‌ها را دریافت کند
+    PORT = int(os.environ.get("PORT", "8000"))
     app.run(host="0.0.0.0", port=PORT)
