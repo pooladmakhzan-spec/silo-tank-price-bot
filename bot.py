@@ -897,27 +897,40 @@ async def silo_pricing_final_calculate(update: Update, context: ContextTypes.DEF
 # ==============================================================================
 # تابع لغو و تنظیمات اصلی برنامه
 # ==============================================================================
+app = Flask(__name__)
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error and send a user-friendly message."""
     print(f"Update '{update}' caused error '{context.error}'")
 
+# تعریف برنامه تلگرام
+application = ApplicationBuilder().token(TOKEN).build()
+
+# 2. تعریف مسیر وب‌هوک با استفاده از دکوراتور Flask
+@app.route(f"/{TOKEN}", methods=["POST"])
+async def webhook_handler():
+    """هندلر وب‌هوک برای پردازش به‌روزرسانی‌ها از تلگرام."""
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+    return "ok"
+
+# تابع اصلی برای تنظیم هندلرها
 def main() -> None:
     """Start the bot."""
-    # Create the Application and pass your bot's token.
-    application = ApplicationBuilder().token(TOKEN).build()
-    
     # Define a ConversationHandler for all the logic
     conv_handler = ConversationHandler(
+        # ... (کد ConversationHandler شما در اینجا قرار می‌گیرد، بدون تغییر)
         entry_points=[CommandHandler("start", start)],
         states={
+            # ... (تمام stateهای شما)
             SELECTING_COMPONENT: [
                 CallbackQueryHandler(select_component, pattern="^component_(tank|silo)$")
             ],
             SELECTING_TASK: [
                 CallbackQueryHandler(select_task, pattern="^task_(pricing|calc)$|^back_to_start$")
             ],
-            # --- Tank Pricing Handlers ---
+            # ... (سایر stateها)
             TANK_PRICING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_diameter)],
             TANK_PRICING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_height)],
             TANK_PRICING_THICKNESS_CYL: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_thickness_cyl)],
@@ -931,8 +944,6 @@ def main() -> None:
             TANK_PRICING_SUPPORT_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_thickness)],
             TANK_PRICING_WASTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_waste)],
             TANK_PRICING_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_final_calculate)],
-
-            # --- Tank Calc Handlers ---
             TANK_CALC_ORIENTATION: [CallbackQueryHandler(tank_calc_orientation, pattern="^(vertical|horizontal)$")],
             TANK_CALC_CHOICE: [CallbackQueryHandler(tank_calc_choice, pattern="^(volume|length|diameter)$")],
             TANK_AWAITING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_diameter)],
@@ -948,23 +959,17 @@ def main() -> None:
             SILO_AWAITING_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_capacity)],
             SILO_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_bottom_h)],
             SILO_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_top_h)],
-            
-            # Add other Silo pricing handlers here once you write them
-            SILO_PRICING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, ...)],
         },
         fallbacks=[CommandHandler("start", start)],
     )
 
     application.add_handler(conv_handler)
     application.add_error_handler(error_handler)
-    
-    # Start the bot in webhook mode
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", "8080")),
-        url_path=TOKEN,
-        webhook_url=WEBHOOK_URL,
-    )
 
+# اجرای برنامه
 if __name__ == "__main__":
     main()
+    PORT = int(os.environ.get("PORT", "8080"))
+    # تنظیم وب‌هوک به صورت یکبار و اجرای سرور
+    application.bot.set_webhook(url=WEBHOOK_URL)
+    app.run(host="0.0.0.0", port=PORT)
