@@ -897,7 +897,7 @@ async def silo_pricing_final_calculate(update: Update, context: ContextTypes.DEF
 # ==============================================================================
 # تابع لغو و تنظیمات اصلی برنامه
 # ==============================================================================
-app = Flask(__name__)
+app = flask[async]
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error and send a user-friendly message."""
