@@ -1,4 +1,6 @@
 import math
+import os
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -17,6 +19,10 @@ STEEL_DENSITY_KG_M3 = 7850      # چگالی فولاد (kg/m^3)
 CEMENT_DENSITY_KG_M3 = 1600     # چگالی سیمان فله (kg/m^3)
 INCH_TO_M = 0.0254
 END = ConversationHandler.END
+
+# --- توکن و URL ربات ---
+TOKEN = os.environ.get("TELEGRAM_TOKEN", "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY")
+WEBHOOK_URL = f"https://silo-tank-price-bot.onrender.com/{TOKEN}"
 
 # ==============================================================================
 # تعریف وضعیت‌های مکالمه (States)
@@ -898,82 +904,104 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     return END
 
-def main():
-    """اجرای اصلی بات تلگرام."""
-    # !!!***!!! توکن ربات خود را در اینجا قرار دهید !!!***!!!
-    application = ApplicationBuilder().token("8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY").build()
+# --- ساخت اپلیکیشن تلگرام و Flask ---
+application = ApplicationBuilder().token(TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
-        states={
-            SELECTING_COMPONENT: [CallbackQueryHandler(select_component, pattern='^component_')],
-            SELECTING_TASK: [CallbackQueryHandler(select_task, pattern='^(task_|back_to_start)')],
-            
-            # --- Tank States ---
-            TANK_PRICING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_diameter)],
-            TANK_PRICING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_height)],
-            TANK_PRICING_THICKNESS_CYL: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_thickness_cyl)],
-            TANK_PRICING_CONE_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_bottom_h)],
-            TANK_PRICING_CONE_BOTTOM_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_bottom_thick)],
-            TANK_PRICING_CONE_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_top_h)],
-            TANK_PRICING_CONE_TOP_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_top_thick)],
-            TANK_PRICING_SUPPORT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_count)],
-            TANK_PRICING_SUPPORT_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_height)],
-            TANK_PRICING_SUPPORT_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_diameter)],
-            TANK_PRICING_SUPPORT_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_thickness)],
-            TANK_PRICING_WASTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_waste)],
-            TANK_PRICING_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_final_calculate)],
-            
-            TANK_CALC_ORIENTATION: [CallbackQueryHandler(tank_calc_orientation, pattern='^(vertical|horizontal)$')],
-            TANK_CALC_CHOICE: [CallbackQueryHandler(tank_calc_choice, pattern='^(length|volume|diameter)$')],
-            TANK_AWAITING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_diameter)],
-            TANK_AWAITING_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_length)],
-            TANK_AWAITING_VOLUME: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_volume)],
-            TANK_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_bottom_h)],
-            TANK_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_top_h)],
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler('start', start)],
+    states={
+        SELECTING_COMPONENT: [CallbackQueryHandler(select_component, pattern='^component_')],
+        SELECTING_TASK: [CallbackQueryHandler(select_task, pattern='^(task_|back_to_start)')],
+        
+        # --- Tank States ---
+        TANK_PRICING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_diameter)],
+        TANK_PRICING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_height)],
+        TANK_PRICING_THICKNESS_CYL: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_thickness_cyl)],
+        TANK_PRICING_CONE_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_bottom_h)],
+        TANK_PRICING_CONE_BOTTOM_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_bottom_thick)],
+        TANK_PRICING_CONE_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_top_h)],
+        TANK_PRICING_CONE_TOP_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_top_thick)],
+        TANK_PRICING_SUPPORT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_count)],
+        TANK_PRICING_SUPPORT_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_height)],
+        TANK_PRICING_SUPPORT_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_diameter)],
+        TANK_PRICING_SUPPORT_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_thickness)],
+        TANK_PRICING_WASTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_waste)],
+        TANK_PRICING_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_final_calculate)],
+        
+        TANK_CALC_ORIENTATION: [CallbackQueryHandler(tank_calc_orientation, pattern='^(vertical|horizontal)$')],
+        TANK_CALC_CHOICE: [CallbackQueryHandler(tank_calc_choice, pattern='^(length|volume|diameter)$')],
+        TANK_AWAITING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_diameter)],
+        TANK_AWAITING_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_length)],
+        TANK_AWAITING_VOLUME: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_volume)],
+        TANK_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_bottom_h)],
+        TANK_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_top_h)],
 
-            # --- Silo States ---
-            SILO_CALC_CHOICE: [CallbackQueryHandler(silo_calc_choice, pattern='^(capacity|length|diameter)$')],
-            SILO_AWAITING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_diameter)],
-            SILO_AWAITING_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_length)],
-            SILO_AWAITING_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_capacity)],
-            SILO_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_bottom_h)],
-            SILO_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_top_h)],
+        # --- Silo States ---
+        SILO_CALC_CHOICE: [CallbackQueryHandler(silo_calc_choice, pattern='^(capacity|length|diameter)$')],
+        SILO_AWAITING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_diameter)],
+        SILO_AWAITING_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_length)],
+        SILO_AWAITING_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_capacity)],
+        SILO_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_bottom_h)],
+        SILO_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_top_h)],
 
-            SILO_PRICING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_diameter)],
-            SILO_PRICING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_height)],
-            SILO_PRICING_THICKNESS_CYL: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_thickness_cyl)],
-            SILO_PRICING_CONE_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_cone_bottom_h)],
-            SILO_PRICING_CONE_BOTTOM_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_cone_bottom_thick)],
-            SILO_PRICING_CONE_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_cone_top_h)],
-            SILO_PRICING_CONE_TOP_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_cone_top_thick)],
-            SILO_PRICING_LADDER_NO_CAGE_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_ladder_no_cage_h)],
-            SILO_PRICING_LADDER_CAGE_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_ladder_cage_h)],
-            SILO_PRICING_SUPPORT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_support_count)],
-            SILO_PRICING_SUPPORT_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_support_height)],
-            SILO_PRICING_SUPPORT_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_support_diameter)],
-            SILO_PRICING_SUPPORT_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_support_thickness)],
-            SILO_PRICING_KALLAF_ROWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_kallaf_rows)],
-            SILO_PRICING_KALLAF_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_kallaf_diameter)],
-            SILO_PRICING_KALLAF_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_kallaf_thickness)],
-            SILO_PRICING_BADBAND_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_badband_diameter)],
-            SILO_PRICING_BADBAND_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_badband_thickness)],
-            SILO_PRICING_WASTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_waste)],
-            SILO_PRICING_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_final_calculate)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)],
-        # Allow user to go back to the start menu from the task selection menu
-        map_to_parent={
-            END: END,
-        }
-    )
+        SILO_PRICING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_diameter)],
+        SILO_PRICING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_height)],
+        SILO_PRICING_THICKNESS_CYL: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_thickness_cyl)],
+        SILO_PRICING_CONE_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_cone_bottom_h)],
+        SILO_PRICING_CONE_BOTTOM_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_cone_bottom_thick)],
+        SILO_PRICING_CONE_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_cone_top_h)],
+        SILO_PRICING_CONE_TOP_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_cone_top_thick)],
+        SILO_PRICING_LADDER_NO_CAGE_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_ladder_no_cage_h)],
+        SILO_PRICING_LADDER_CAGE_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_ladder_cage_h)],
+        SILO_PRICING_SUPPORT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_support_count)],
+        SILO_PRICING_SUPPORT_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_support_height)],
+        SILO_PRICING_SUPPORT_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_support_diameter)],
+        SILO_PRICING_SUPPORT_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_support_thickness)],
+        SILO_PRICING_KALLAF_ROWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_kallaf_rows)],
+        SILO_PRICING_KALLAF_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_kallaf_diameter)],
+        SILO_PRICING_KALLAF_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_kallaf_thickness)],
+        SILO_PRICING_BADBAND_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_badband_diameter)],
+        SILO_PRICING_BADBAND_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_badband_thickness)],
+        SILO_PRICING_WASTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_waste)],
+        SILO_PRICING_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_pricing_final_calculate)],
+    },
+    fallbacks=[CommandHandler('cancel', cancel)],
+    # Allow user to go back to the start menu from the task selection menu
+    map_to_parent={
+        END: END,
+    }
+)
+application.add_handler(conv_handler)
 
-    application.add_handler(conv_handler)
-    print("Bot is running...")
-    # Remove any existing webhook to avoid conflicts
-    application.bot.delete_webhook()
-    application.run_polling(drop_pending_updates=True)
+# --- راه‌اندازی وب سرور Flask ---
+app = Flask(__name__)
+
+@app.route(f'/{TOKEN}', methods=['POST'])
+async def webhook():
+    """این تابع آپدیت‌های تلگرام را دریافت کرده و به کتابخانه می‌دهد."""
+    update_data = request.get_json()
+    update = Update.de_json(update_data, application.bot)
+    await application.process_update(update)
+    return 'ok', 200
+
+# یک روت ساده برای چک کردن وضعیت سرور
+@app.route('/')
+def index():
+    return 'Hello, bot is running!'
 
 
-if __name__ == '__main__':
-    main()
+async def main():
+    """تنظیم وبهوک و آماده‌سازی برنامه."""
+    # وبهوک را تنظیم می‌کنیم.
+    await application.bot.set_webhook(url=WEBHOOK_URL, allowed_updates=Update.ALL_TYPES)
+    print(f"Webhook set to {WEBHOOK_URL}")
+
+if __name__ == "__main__":
+    import asyncio
+    # ابتدا وبهوک را تنظیم می‌کنیم
+    asyncio.run(main())
+    
+    # سپس سرور فلسک را روی پورت مناسب اجرا می‌کنیم
+    # Render به طور خودکار از پورت ۱۰۰۰۰ استفاده می‌کند.
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
