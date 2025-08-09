@@ -1,8 +1,9 @@
 import math
 import os
 from flask import Flask, request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
+from telegram import Update
+from telegram.ext import Application
+(
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -723,18 +724,20 @@ def main() -> Application:
 # ==============================================================================
 
 app = Flask(__name__)
-# فراخوانی تابع main برای ساخت و دریافت نمونه application
-telegram_application = main()
+TOKEN = "توکن ربات"
+telegram_application = Application.builder().token(TOKEN).build()
+
+@app.before_first_request
+async def init_bot():
+    await telegram_application.initialize()
+    await telegram_application.start()
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 async def webhook_handler():
-    """هندلر وب‌هوک برای پردازش به‌روزرسانی‌ها از تلگرام."""
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), telegram_application.bot)
-        await telegram_application.process_update(update)
+    data = request.get_json(force=True)
+    update = Update.de_json(data, telegram_application.bot)
+    await telegram_application.process_update(update)
     return "ok"
 
 if __name__ == "__main__":
-    telegram_application.bot.set_webhook(url=WEBHOOK_URL)
-    PORT = int(os.environ.get("PORT", "8080"))
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(port=5000)
