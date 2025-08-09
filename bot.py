@@ -10,6 +10,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ConversationHandler,
     ContextTypes,
+    Application
 )
 
 # ==============================================================================
@@ -21,6 +22,7 @@ INCH_TO_M = 0.0254
 END = ConversationHandler.END
 
 # --- توکن و URL ربات ---
+# حتماً این توکن را با توکن واقعی خود جایگزین کنید یا آن را در Render به عنوان متغیر محیطی (Environment Variable) تنظیم کنید.
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY")
 WEBHOOK_URL = f"https://silo-tank-price-bot.onrender.com/{TOKEN}"
 
@@ -33,7 +35,6 @@ SELECTING_COMPONENT, SELECTING_TASK = range(2)
 
 # --- وضعیت‌های مربوط به مخزن (Tank) ---
 (
-    TANK_CHOOSE_PRICING, TANK_CHOOSE_CALC,
     TANK_PRICING_DIAMETER, TANK_PRICING_HEIGHT, TANK_PRICING_THICKNESS_CYL,
     TANK_PRICING_CONE_BOTTOM_H, TANK_PRICING_CONE_BOTTOM_THICK, TANK_PRICING_CONE_TOP_H,
     TANK_PRICING_CONE_TOP_THICK, TANK_PRICING_SUPPORT_COUNT, TANK_PRICING_SUPPORT_HEIGHT,
@@ -42,15 +43,10 @@ SELECTING_COMPONENT, SELECTING_TASK = range(2)
     TANK_CALC_ORIENTATION, TANK_CALC_CHOICE, TANK_AWAITING_DIAMETER,
     TANK_AWAITING_LENGTH, TANK_AWAITING_VOLUME, TANK_AWAITING_BOTTOM_H,
     TANK_AWAITING_TOP_H
-) = range(2, 24)
+) = range(2, 22)
 
 # --- وضعیت‌های مربوط به سیلو (Silo) ---
 (
-    SILO_CHOOSE_PRICING, SILO_CHOOSE_CALC,
-    # States for Silo Dimensions Calculation
-    SILO_CALC_CHOICE, SILO_AWAITING_DIAMETER, SILO_AWAITING_LENGTH,
-    SILO_AWAITING_CAPACITY, SILO_AWAITING_BOTTOM_H, SILO_AWAITING_TOP_H,
-    # States for Silo Pricing
     SILO_PRICING_DIAMETER, SILO_PRICING_HEIGHT, SILO_PRICING_THICKNESS_CYL,
     SILO_PRICING_CONE_BOTTOM_H, SILO_PRICING_CONE_BOTTOM_THICK,
     SILO_PRICING_CONE_TOP_H, SILO_PRICING_CONE_TOP_THICK,
@@ -59,9 +55,10 @@ SELECTING_COMPONENT, SELECTING_TASK = range(2)
     SILO_PRICING_SUPPORT_DIAMETER, SILO_PRICING_SUPPORT_THICKNESS,
     SILO_PRICING_KALLAF_ROWS, SILO_PRICING_KALLAF_DIAMETER, SILO_PRICING_KALLAF_THICKNESS,
     SILO_PRICING_BADBAND_DIAMETER, SILO_PRICING_BADBAND_THICKNESS,
-    SILO_PRICING_WASTE, SILO_PRICING_WAGE
-) = range(24, 52)
-
+    SILO_PRICING_WASTE, SILO_PRICING_WAGE,
+    SILO_CALC_CHOICE, SILO_AWAITING_DIAMETER, SILO_AWAITING_LENGTH,
+    SILO_AWAITING_CAPACITY, SILO_AWAITING_BOTTOM_H, SILO_AWAITING_TOP_H
+) = range(22, 48)
 
 # ==============================================================================
 # توابع کمکی
@@ -71,13 +68,10 @@ def _calculate_pipe_weight(length_m: float, diameter_inch: float, thickness_mm: 
     """وزن یک لوله توخالی را محاسبه می‌کند."""
     if length_m <= 0 or diameter_inch <= 0 or thickness_mm <= 0:
         return 0
-    
     outer_r_m = (diameter_inch * INCH_TO_M) / 2
     thickness_m = thickness_mm / 1000
     inner_r_m = outer_r_m - thickness_m
-    
     if inner_r_m < 0: inner_r_m = 0
-    
     volume_m3 = math.pi * (outer_r_m**2 - inner_r_m**2) * length_m
     return volume_m3 * STEEL_DENSITY_KG_M3
 
@@ -85,11 +79,9 @@ def _calculate_strap_weight(length_m: float, width_cm: float, thickness_mm: floa
     """وزن یک تسمه را محاسبه می‌کند."""
     if length_m <= 0 or width_cm <= 0 or thickness_mm <= 0:
         return 0
-    
     width_m = width_cm / 100
     thickness_m = thickness_mm / 1000
-    area_m2 = width_m * thickness_m
-    volume_m3 = area_m2 * length_m
+    volume_m3 = (width_m * thickness_m) * length_m
     return volume_m3 * STEEL_DENSITY_KG_M3
 
 # ==============================================================================
@@ -103,25 +95,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [InlineKeyboardButton("🏗️ محاسبات سیلو سیمان", callback_data="component_silo")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     context.user_data.clear()
-    
     if update.message:
         await update.message.reply_text("سلام! لطفاً نوع محاسبات را انتخاب کنید:", reply_markup=reply_markup)
     else:
         query = update.callback_query
         await query.answer()
         await query.edit_message_text("سلام! لطفاً نوع محاسبات را انتخاب کنید:", reply_markup=reply_markup)
-
     return SELECTING_COMPONENT
-
 
 async def select_component(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """پردازش انتخاب کاربر (مخزن یا سیلو) و نمایش منوی وظایف."""
     query = update.callback_query
     await query.answer()
     choice = query.data
-
     if choice == "component_tank":
         context.user_data['component'] = 'tank'
         keyboard = [
@@ -132,7 +119,6 @@ async def select_component(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("محاسبات مخزن انتخاب شد. لطفاً یک گزینه را انتخاب کنید:", reply_markup=reply_markup)
         return SELECTING_TASK
-
     elif choice == "component_silo":
         context.user_data['component'] = 'silo'
         keyboard = [
@@ -143,21 +129,16 @@ async def select_component(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("محاسبات سیلو انتخاب شد. لطفاً یک گزینه را انتخاب کنید:", reply_markup=reply_markup)
         return SELECTING_TASK
-    
     return END
-
 
 async def select_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """پردازش انتخاب وظیفه (قیمت‌گذاری یا محاسبه) بر اساس نوع قطعه."""
     query = update.callback_query
     await query.answer()
-    
     if query.data == "back_to_start":
         return await start(update, context)
-
     task_choice = query.data
     component = context.user_data.get('component')
-
     if component == 'tank':
         if task_choice == "task_pricing":
             await query.edit_message_text("قیمت‌گذاری مخزن انتخاب شد.\n\nلطفاً قطر بدنه (cm) را وارد کنید:")
@@ -172,7 +153,6 @@ async def select_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 "محاسبه ابعاد مخزن انتخاب شد.\n\nلطفاً جهت مخزن را انتخاب کنید:", reply_markup=reply_markup
             )
             return TANK_CALC_ORIENTATION
-
     elif component == 'silo':
         if task_choice == "task_pricing":
             context.user_data['silo_p'] = {}
@@ -188,11 +168,10 @@ async def select_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("محاسبه ابعاد سیلو انتخاب شد.\n\nچه مقداری را می‌خواهید محاسبه کنید؟", reply_markup=reply_markup)
             return SILO_CALC_CHOICE
-
     return END
 
 # ==============================================================================
-# بخش اول: منطق و توابع مربوط به مخزن (TANK)
+# منطق و توابع مربوط به مخزن (TANK)
 # ==============================================================================
 
 # --- قیمت‌گذاری مخزن ---
@@ -334,7 +313,6 @@ async def tank_pricing_final_calculate(update: Update, context: ContextTypes.DEF
         wage_per_kg = float(update.message.text)
         if wage_per_kg < 0: raise ValueError
         data = context.user_data['tank_p']
-
         d_m = data['diameter_cm'] / 100
         h_cyl_m = data['height_cm'] / 100
         t_cyl_m = data['thickness_cyl_mm'] / 1000
@@ -342,38 +320,30 @@ async def tank_pricing_final_calculate(update: Update, context: ContextTypes.DEF
         t_cb_m = data['cone_bottom_thick_mm'] / 1000
         h_ct_m = data['cone_top_h_cm'] / 100
         t_ct_m = data['cone_top_thick_mm'] / 1000
-        
         support_count = data['support_count']
         support_h_m = data['support_height_cm'] / 100
         support_d_inch = data['support_diameter_inch']
         support_t_mm = data['support_thickness_mm']
-
         radius_m = d_m / 2
-
         cyl_area = math.pi * d_m * h_cyl_m
         weight_cyl = cyl_area * t_cyl_m * STEEL_DENSITY_KG_M3
-
         weight_cb = 0
         if h_cb_m > 0:
             slant_cb = math.sqrt(radius_m**2 + h_cb_m**2)
             area_cb = math.pi * radius_m * slant_cb
             weight_cb = area_cb * t_cb_m * STEEL_DENSITY_KG_M3
-
         weight_ct = 0
         if h_ct_m > 0:
             slant_ct = math.sqrt(radius_m**2 + h_ct_m**2)
             area_ct = math.pi * radius_m * slant_ct
             weight_ct = area_ct * t_ct_m * STEEL_DENSITY_KG_M3
-
         weight_supports = 0
         if support_count > 0:
             weight_one_support = _calculate_pipe_weight(support_h_m, support_d_inch, support_t_mm)
             weight_supports = weight_one_support * support_count
-
         total_weight = weight_cyl + weight_cb + weight_ct + weight_supports
         weight_with_waste = total_weight * (1 + data['waste_percent'] / 100)
         total_price = weight_with_waste * wage_per_kg
-
         response = "📊 **نتایج قیمت‌گذاری مخزن** 📊\n\n"
         response += f"🔹 وزن بدنه استوانه‌ای: `{int(weight_cyl)}` کیلوگرم\n"
         response += f"🔹 وزن قیف پایین: `{int(weight_cb)}` کیلوگرم\n"
@@ -383,11 +353,9 @@ async def tank_pricing_final_calculate(update: Update, context: ContextTypes.DEF
         response += f"🔸 **وزن کلی (بدون پرتی):** `{int(total_weight)}` کیلوگرم\n"
         response += f"🔸 **وزن کلی (با پرتی):** `{int(weight_with_waste)}` کیلوگرم\n\n"
         response += f"💰 **قیمت کل (با دستمزد):** `{int(total_price):,}` تومان"
-        
         await update.message.reply_text(response, parse_mode='Markdown')
         context.user_data.clear()
         return END
-
     except (ValueError, TypeError):
         await update.message.reply_text("خطا: لطفاً دستمزد را به صورت یک عدد معتبر وارد کنید.")
         return TANK_PRICING_WAGE
@@ -397,13 +365,11 @@ async def tank_pricing_final_calculate(update: Update, context: ContextTypes.DEF
         return END
 
 # --- محاسبه ابعاد مخزن ---
-
 async def tank_calc_orientation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     orient = query.data
     context.user_data['tank_c'] = {'orientation': orient}
-    
     keyboard = [
         [InlineKeyboardButton("حجم (لیتر)", callback_data='volume')],
         [InlineKeyboardButton("طول بدنه (cm)", callback_data='length')],
@@ -420,7 +386,6 @@ async def tank_calc_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
     find = query.data
     context.user_data['tank_c']['find'] = find
-    
     if find == 'volume':
         await query.edit_message_text("محاسبه حجم انتخاب شد.\n\nلطفاً قطر مخزن (cm) را وارد کنید:")
         return TANK_AWAITING_DIAMETER
@@ -483,7 +448,6 @@ async def tank_calc_get_bottom_h(update: Update, context: ContextTypes.DEFAULT_T
         val = float(update.message.text)
         if val < 0: raise ValueError
         context.user_data['tank_c']['bottom_h_m'] = val / 100
-        
         if context.user_data['tank_c']['orientation'] == 'vertical':
             context.user_data['tank_c']['top_h_m'] = 0
             return await tank_perform_calculation(update, context)
@@ -508,44 +472,36 @@ async def tank_perform_calculation(update: Update, context: ContextTypes.DEFAULT
     """تابع نهایی برای انجام محاسبات ابعاد مخزن."""
     data = context.user_data['tank_c']
     find = data['find']
-    
     try:
         if find == 'volume':
             r = data['diameter_m'] / 2
             L = data['length_m']
             h_b = data['bottom_h_m']
             h_t = data['top_h_m']
-            
             vol_cyl = math.pi * r**2 * L
             vol_cone_b = (1/3) * math.pi * r**2 * h_b
             vol_cone_t = (1/3) * math.pi * r**2 * h_t
-            
             total_vol_m3 = vol_cyl + vol_cone_b + vol_cone_t
             total_vol_liters = total_vol_m3 * 1000
             await update.message.reply_text(f"✅ **نتیجه:** حجم کل مخزن `{total_vol_liters:,.2f}` لیتر است.", parse_mode='Markdown')
-
         elif find == 'length':
             r = data['diameter_m'] / 2
             V = data['volume_m3']
             h_b = data['bottom_h_m']
             h_t = data['top_h_m']
-            
             vol_cone_b = (1/3) * math.pi * r**2 * h_b
             vol_cone_t = (1/3) * math.pi * r**2 * h_t
-            
             vol_cyl_needed = V - vol_cone_b - vol_cone_t
             if vol_cyl_needed < 0 or r == 0:
                 await update.message.reply_text("خطا: با این ورودی‌ها، حجم قیف‌ها از حجم کل بیشتر است!")
             else:
                 L_calc_m = vol_cyl_needed / (math.pi * r**2)
                 await update.message.reply_text(f"✅ **نتیجه:** طول بدنه مخزن `{L_calc_m * 100:.2f}` سانتی‌متر است.", parse_mode='Markdown')
-
         elif find == 'diameter':
             L = data['length_m']
             V = data['volume_m3']
             h_b = data['bottom_h_m']
             h_t = data['top_h_m']
-
             denominator = math.pi * (L + h_b/3 + h_t/3)
             if denominator <= 0:
                 await update.message.reply_text("خطا: با این ورودی‌ها محاسبه قطر ممکن نیست.")
@@ -556,26 +512,22 @@ async def tank_perform_calculation(update: Update, context: ContextTypes.DEFAULT
                 else:
                     d_calc_m = 2 * math.sqrt(r_sq)
                     await update.message.reply_text(f"✅ **نتیجه:** قطر بدنه مخزن `{d_calc_m * 100:.2f}` سانتی‌متر است.", parse_mode='Markdown')
-
     except Exception as e:
         await update.message.reply_text(f"یک خطای ناشناخته در محاسبه رخ داد: {e}")
-        
     context.user_data.clear()
     return END
 
 
 # ==============================================================================
-# بخش دوم: منطق و توابع مربوط به سیلو (SILO)
+# منطق و توابع مربوط به سیلو (SILO)
 # ==============================================================================
 
 # --- محاسبه ابعاد سیلو ---
-
 async def silo_calc_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     find = query.data
     context.user_data['silo_c']['find'] = find
-    
     if find == 'capacity':
         await query.edit_message_text("محاسبه ظرفیت انتخاب شد.\n\nلطفاً قطر سیلو (cm) را وارد کنید:")
         return SILO_AWAITING_DIAMETER
@@ -658,44 +610,36 @@ async def silo_perform_calculation(update: Update, context: ContextTypes.DEFAULT
     """تابع نهایی برای انجام محاسبات ابعاد سیلو."""
     data = context.user_data['silo_c']
     find = data['find']
-    
     try:
         if find == 'capacity':
             r = data['diameter_m'] / 2
             L = data['length_m']
             h_b = data['bottom_h_m']
             h_t = data['top_h_m']
-            
             vol_cyl = math.pi * r**2 * L
             vol_cone_b = (1/3) * math.pi * r**2 * h_b
             vol_cone_t = (1/3) * math.pi * r**2 * h_t
-            
             total_vol_m3 = vol_cyl + vol_cone_b + vol_cone_t
             total_capacity_ton = (total_vol_m3 * CEMENT_DENSITY_KG_M3) / 1000
             await update.message.reply_text(f"✅ **نتیجه:** ظرفیت کل سیلو `{total_capacity_ton:,.2f}` تُن است.", parse_mode='Markdown')
-
         elif find == 'length':
             r = data['diameter_m'] / 2
             V = data['volume_m3']
             h_b = data['bottom_h_m']
             h_t = data['top_h_m']
-            
             vol_cone_b = (1/3) * math.pi * r**2 * h_b
             vol_cone_t = (1/3) * math.pi * r**2 * h_t
-            
             vol_cyl_needed = V - vol_cone_b - vol_cone_t
             if vol_cyl_needed < 0 or r == 0:
                 await update.message.reply_text("خطا: حجم قیف‌ها از ظرفیت کل بیشتر است!")
             else:
                 L_calc_m = vol_cyl_needed / (math.pi * r**2)
                 await update.message.reply_text(f"✅ **نتیجه:** ارتفاع استوانه سیلو `{L_calc_m * 100:.2f}` سانتی‌متر است.", parse_mode='Markdown')
-
         elif find == 'diameter':
             L = data['length_m']
             V = data['volume_m3']
             h_b = data['bottom_h_m']
             h_t = data['top_h_m']
-
             denominator = math.pi * (L + h_b/3 + h_t/3)
             if denominator <= 0:
                 await update.message.reply_text("خطا: با این ورودی‌ها محاسبه قطر ممکن نیست.")
@@ -706,10 +650,8 @@ async def silo_perform_calculation(update: Update, context: ContextTypes.DEFAULT
                 else:
                     d_calc_m = 2 * math.sqrt(r_sq)
                     await update.message.reply_text(f"✅ **نتیجه:** قطر سیلو `{d_calc_m * 100:.2f}` سانتی‌متر است.", parse_mode='Markdown')
-
     except Exception as e:
         await update.message.reply_text(f"یک خطای ناشناخته در محاسبه رخ داد: {e}")
-        
     context.user_data.clear()
     return END
 
@@ -718,17 +660,17 @@ async def silo_perform_calculation(update: Update, context: ContextTypes.DEFAULT
 # ==============================================================================
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log the error and send a user-friendly message."""
+    """خطاها را لاگ کرده و یک پیام کاربرپسند ارسال می‌کند."""
     print(f"Update '{update}' caused error '{context.error}'")
 
 # ==============================================================================
-# بخش اصلی برنامه
+# بخش اصلی برنامه و وب‌هوک
 # ==============================================================================
 
-def main() -> ApplicationBuilder:
-    """Start the bot and return the application instance."""
+def main() -> Application:
+    """برنامه ربات را ساخته و نمونه آن را برمی‌گرداند."""
     application = ApplicationBuilder().token(TOKEN).build()
-
+    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -738,7 +680,6 @@ def main() -> ApplicationBuilder:
             SELECTING_TASK: [
                 CallbackQueryHandler(select_task, pattern="^task_(pricing|calc)$|^back_to_start$")
             ],
-            # --- TANK Handlers ---
             TANK_PRICING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_diameter)],
             TANK_PRICING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_height)],
             TANK_PRICING_THICKNESS_CYL: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_thickness_cyl)],
@@ -759,22 +700,23 @@ def main() -> ApplicationBuilder:
             TANK_AWAITING_VOLUME: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_volume)],
             TANK_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_bottom_h)],
             TANK_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_top_h)],
-            
-            # --- SILO Handlers ---
             SILO_CALC_CHOICE: [CallbackQueryHandler(silo_calc_choice, pattern="^(capacity|length|diameter)$")],
             SILO_AWAITING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_diameter)],
             SILO_AWAITING_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_length)],
             SILO_AWAITING_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_capacity)],
             SILO_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_bottom_h)],
             SILO_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_top_h)],
-            
-            # TODO: Add handlers for SILO pricing when ready
         },
         fallbacks=[CommandHandler("start", start)],
     )
 
     application.add_handler(conv_handler)
     application.add_error_handler(error_handler)
+    
+    # ❗️ مقداردهی اولیه به Application
+    # این خط مشکل Runtimeerror را حل می‌کند.
+    application.initialize()
+    
     return application
 
 # ==============================================================================
@@ -782,7 +724,7 @@ def main() -> ApplicationBuilder:
 # ==============================================================================
 
 app = Flask(__name__)
-# Get the Application instance from the main function
+# فراخوانی تابع main برای ساخت و دریافت نمونه application
 telegram_application = main()
 
 @app.route(f"/{TOKEN}", methods=["POST"])
