@@ -1,19 +1,13 @@
-import math
-import os
-from flask import Flask, request
 from telegram import Update
-from telegram.ext import ApplicationBuilder
-(
+from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    filters,
     CallbackQueryHandler,
     ConversationHandler,
     ContextTypes,
-    Application
+    filters
 )
-
 # ==============================================================================
 # ثابت‌های عمومی
 # ==============================================================================
