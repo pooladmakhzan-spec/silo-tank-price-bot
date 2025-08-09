@@ -1,738 +1,492 @@
-import os
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
     ContextTypes,
-    filters
+    ConversationHandler,
+    filters,
 )
-# ==============================================================================
-# ثابت‌های عمومی
-# ==============================================================================
-STEEL_DENSITY_KG_M3 = 7850        # چگالی فولاد (kg/m^3)
-CEMENT_DENSITY_KG_M3 = 1600       # چگالی سیمان فله (kg/m^3)
+import math
+
+# ثابت‌ها
+STEEL_DENSITY_KG_M3 = 7850
 INCH_TO_M = 0.0254
+
+# مراحل کلی
+(
+    CHOOSE_TYPE,
+    # مخزن
+    TANK_DIAMETER,
+    TANK_HEIGHT,
+    TANK_THICKNESS,
+    TANK_CONE_BOTTOM_HEIGHT,
+    TANK_CONE_BOTTOM_THICKNESS,
+    TANK_CONE_TOP_HEIGHT,
+    TANK_CONE_TOP_THICKNESS,
+    TANK_SUPPORT_COUNT,
+    TANK_SUPPORT_HEIGHT,
+    TANK_SUPPORT_DIAMETER,
+    TANK_SUPPORT_THICKNESS,
+    TANK_WASTE_PERCENT,
+    TANK_WAGE,
+    # سیلو
+    SILO_DIAMETER,
+    SILO_HEIGHT,
+    SILO_THICKNESS,
+    SILO_CONE_HEIGHT,
+    SILO_CONE_THICKNESS,
+    SILO_SUPPORT_COUNT,
+    SILO_SUPPORT_HEIGHT,
+    SILO_SUPPORT_DIAMETER,
+    SILO_SUPPORT_THICKNESS,
+    SILO_WASTE_PERCENT,
+    SILO_WAGE,
+) = range(25)
+
 END = ConversationHandler.END
 
-# --- توکن و URL ربات ---
-# حتماً این توکن را با توکن واقعی خود جایگزین کنید یا آن را در Render به عنوان متغیر محیطی (Environment Variable) تنظیم کنید.
-TOKEN = os.environ.get("TELEGRAM_TOKEN", "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY")
-WEBHOOK_URL = f"https://silo-tank-price-bot.onrender.com/{TOKEN}"
-# ==============================================================================
-# تعریف وضعیت‌های مکالمه (States)
-# ==============================================================================
 
-# --- وضعیت‌های سطح بالا ---
-SELECTING_COMPONENT, SELECTING_TASK = range(2)
+def is_positive_number(text: str) -> bool:
+    try:
+        val = float(text)
+        return val >= 0
+    except ValueError:
+        return False
 
-# --- وضعیت‌های مربوط به مخزن (Tank) ---
-(
-    TANK_PRICING_DIAMETER, TANK_PRICING_HEIGHT, TANK_PRICING_THICKNESS_CYL,
-    TANK_PRICING_CONE_BOTTOM_H, TANK_PRICING_CONE_BOTTOM_THICK, TANK_PRICING_CONE_TOP_H,
-    TANK_PRICING_CONE_TOP_THICK, TANK_PRICING_SUPPORT_COUNT, TANK_PRICING_SUPPORT_HEIGHT,
-    TANK_PRICING_SUPPORT_DIAMETER, TANK_PRICING_SUPPORT_THICKNESS, TANK_PRICING_WASTE,
-    TANK_PRICING_WAGE,
-    TANK_CALC_ORIENTATION, TANK_CALC_CHOICE, TANK_AWAITING_DIAMETER,
-    TANK_AWAITING_LENGTH, TANK_AWAITING_VOLUME, TANK_AWAITING_BOTTOM_H,
-    TANK_AWAITING_TOP_H
-) = range(2, 22)
-
-# --- وضعیت‌های مربوط به سیلو (Silo) ---
-(
-    SILO_PRICING_DIAMETER, SILO_PRICING_HEIGHT, SILO_PRICING_THICKNESS_CYL,
-    SILO_PRICING_CONE_BOTTOM_H, SILO_PRICING_CONE_BOTTOM_THICK,
-    SILO_PRICING_CONE_TOP_H, SILO_PRICING_CONE_TOP_THICK,
-    SILO_PRICING_LADDER_NO_CAGE_H, SILO_PRICING_LADDER_CAGE_H,
-    SILO_PRICING_SUPPORT_COUNT, SILO_PRICING_SUPPORT_HEIGHT,
-    SILO_PRICING_SUPPORT_DIAMETER, SILO_PRICING_SUPPORT_THICKNESS,
-    SILO_PRICING_KALLAF_ROWS, SILO_PRICING_KALLAF_DIAMETER, SILO_PRICING_KALLAF_THICKNESS,
-    SILO_PRICING_BADBAND_DIAMETER, SILO_PRICING_BADBAND_THICKNESS,
-    SILO_PRICING_WASTE, SILO_PRICING_WAGE,
-    SILO_CALC_CHOICE, SILO_AWAITING_DIAMETER, SILO_AWAITING_LENGTH,
-    SILO_AWAITING_CAPACITY, SILO_AWAITING_BOTTOM_H, SILO_AWAITING_TOP_H
-) = range(22, 48)
-
-# ==============================================================================
-# توابع کمکی
-# ==============================================================================
-
-def _calculate_pipe_weight(length_m: float, diameter_inch: float, thickness_mm: float) -> float:
-    """وزن یک لوله توخالی را محاسبه می‌کند."""
-    if length_m <= 0 or diameter_inch <= 0 or thickness_mm <= 0:
-        return 0
-    outer_r_m = (diameter_inch * INCH_TO_M) / 2
-    thickness_m = thickness_mm / 1000
-    inner_r_m = outer_r_m - thickness_m
-    if inner_r_m < 0: inner_r_m = 0
-    volume_m3 = math.pi * (outer_r_m**2 - inner_r_m**2) * length_m
-    return volume_m3 * STEEL_DENSITY_KG_M3
-
-def _calculate_strap_weight(length_m: float, width_cm: float, thickness_mm: float) -> float:
-    """وزن یک تسمه را محاسبه می‌کند."""
-    if length_m <= 0 or width_cm <= 0 or thickness_mm <= 0:
-        return 0
-    width_m = width_cm / 100
-    thickness_m = thickness_mm / 1000
-    volume_m3 = (width_m * thickness_m) * length_m
-    return volume_m3 * STEEL_DENSITY_KG_M3
-
-# ==============================================================================
-# مدیریت جریان اصلی مکالمه
-# ==============================================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """شروع مکالمه و نمایش منوی اصلی برای انتخاب نوع قطعه."""
-    keyboard = [
-        [InlineKeyboardButton("⚙️ محاسبات مخزن", callback_data="component_tank")],
-        [InlineKeyboardButton("🏗️ محاسبات سیلو سیمان", callback_data="component_silo")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     context.user_data.clear()
-    if update.message:
-        await update.message.reply_text("سلام! لطفاً نوع محاسبات را انتخاب کنید:", reply_markup=reply_markup)
+    reply_keyboard = [["مخزن", "سیلو"]]
+    await update.message.reply_text(
+        "سلام! لطفاً نوع سازه را انتخاب کنید:",
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
+    )
+    return CHOOSE_TYPE
+
+
+async def choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if text not in ["مخزن", "سیلو"]:
+        await update.message.reply_text("لطفاً فقط 'مخزن' یا 'سیلو' را انتخاب کنید:")
+        return CHOOSE_TYPE
+    context.user_data['type'] = text
+    if text == "مخزن":
+        await update.message.reply_text(
+            "قطر مخزن (سانتی‌متر):", reply_markup=ReplyKeyboardRemove()
+        )
+        return TANK_DIAMETER
     else:
-        query = update.callback_query
-        await query.answer()
-        await query.edit_message_text("سلام! لطفاً نوع محاسبات را انتخاب کنید:", reply_markup=reply_markup)
-    return SELECTING_COMPONENT
+        await update.message.reply_text(
+            "قطر سیلو (سانتی‌متر):", reply_markup=ReplyKeyboardRemove()
+        )
+        return SILO_DIAMETER
 
-async def select_component(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """پردازش انتخاب کاربر (مخزن یا سیلو) و نمایش منوی وظایف."""
-    query = update.callback_query
-    await query.answer()
-    choice = query.data
-    if choice == "component_tank":
-        context.user_data['component'] = 'tank'
-        keyboard = [
-            [InlineKeyboardButton("1️⃣ قیمت‌گذاری مخزن", callback_data="task_pricing")],
-            [InlineKeyboardButton("2️⃣ محاسبه ابعاد مخزن", callback_data="task_calc")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_start")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("محاسبات مخزن انتخاب شد. لطفاً یک گزینه را انتخاب کنید:", reply_markup=reply_markup)
-        return SELECTING_TASK
-    elif choice == "component_silo":
-        context.user_data['component'] = 'silo'
-        keyboard = [
-            [InlineKeyboardButton("1️⃣ قیمت‌گذاری سیلو", callback_data="task_pricing")],
-            [InlineKeyboardButton("2️⃣ محاسبه ابعاد سیلو", callback_data="task_calc")],
-             [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_start")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("محاسبات سیلو انتخاب شد. لطفاً یک گزینه را انتخاب کنید:", reply_markup=reply_markup)
-        return SELECTING_TASK
-    return END
 
-async def select_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """پردازش انتخاب وظیفه (قیمت‌گذاری یا محاسبه) بر اساس نوع قطعه."""
-    query = update.callback_query
-    await query.answer()
-    if query.data == "back_to_start":
-        return await start(update, context)
-    task_choice = query.data
-    component = context.user_data.get('component')
-    if component == 'tank':
-        if task_choice == "task_pricing":
-            await query.edit_message_text("قیمت‌گذاری مخزن انتخاب شد.\n\nلطفاً قطر بدنه (cm) را وارد کنید:")
-            return TANK_PRICING_DIAMETER
-        elif task_choice == "task_calc":
-            keyboard = [
-                [InlineKeyboardButton("عمودی", callback_data="vertical")],
-                [InlineKeyboardButton("افقی", callback_data="horizontal")],
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(
-                "محاسبه ابعاد مخزن انتخاب شد.\n\nلطفاً جهت مخزن را انتخاب کنید:", reply_markup=reply_markup
-            )
-            return TANK_CALC_ORIENTATION
-    elif component == 'silo':
-        if task_choice == "task_pricing":
-            context.user_data['silo_p'] = {}
-            await query.edit_message_text("قیمت‌گذاری سیلو انتخاب شد.\n\nلطفاً قطر سیلو (cm) را وارد کنید:")
-            return SILO_PRICING_DIAMETER
-        elif task_choice == "task_calc":
-            context.user_data['silo_c'] = {}
-            keyboard = [
-                [InlineKeyboardButton("ظرفیت (تُن)", callback_data='capacity')],
-                [InlineKeyboardButton("ارتفاع استوانه (cm)", callback_data='length')],
-                [InlineKeyboardButton("قطر سیلو (cm)", callback_data='diameter')],
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("محاسبه ابعاد سیلو انتخاب شد.\n\nچه مقداری را می‌خواهید محاسبه کنید؟", reply_markup=reply_markup)
-            return SILO_CALC_CHOICE
-    return END
+# --- مخزن ---
+async def tank_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً قطر مخزن را عدد مثبت و غیر صفر وارد کنید:")
+        return TANK_DIAMETER
+    context.user_data['tank_diameter_cm'] = float(text)
+    await update.message.reply_text("ارتفاع بدنه استوانه‌ای مخزن (سانتی‌متر):")
+    return TANK_HEIGHT
 
-# ==============================================================================
-# منطق و توابع مربوط به مخزن (TANK)
-# ==============================================================================
 
-# --- قیمت‌گذاری مخزن ---
-async def tank_pricing_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def tank_height(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً ارتفاع بدنه را به عدد معتبر وارد کنید:")
+        return TANK_HEIGHT
+    context.user_data['tank_height_cm'] = float(text)
+    await update.message.reply_text("ضخامت ورق بدنه استوانه‌ای (میلی‌متر):")
+    return TANK_THICKNESS
+
+
+async def tank_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً ضخامت بدنه را عدد مثبت و غیر صفر وارد کنید:")
+        return TANK_THICKNESS
+    context.user_data['tank_thickness_mm'] = float(text)
+    await update.message.reply_text("ارتفاع قیف کف مخزن (سانتی‌متر):")
+    return TANK_CONE_BOTTOM_HEIGHT
+
+
+async def tank_cone_bottom_height(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً ارتفاع قیف کف را عدد معتبر وارد کنید:")
+        return TANK_CONE_BOTTOM_HEIGHT
+    context.user_data['tank_cone_bottom_h_cm'] = float(text)
+    await update.message.reply_text("ضخامت ورق قیف کف (میلی‌متر):")
+    return TANK_CONE_BOTTOM_THICKNESS
+
+
+async def tank_cone_bottom_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً ضخامت قیف کف را عدد معتبر وارد کنید:")
+        return TANK_CONE_BOTTOM_THICKNESS
+    context.user_data['tank_cone_bottom_thick_mm'] = float(text)
+    await update.message.reply_text("ارتفاع قیف بالای مخزن (سانتی‌متر):")
+    return TANK_CONE_TOP_HEIGHT
+
+
+async def tank_cone_top_height(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً ارتفاع قیف بالا را عدد معتبر وارد کنید:")
+        return TANK_CONE_TOP_HEIGHT
+    context.user_data['tank_cone_top_h_cm'] = float(text)
+    await update.message.reply_text("ضخامت ورق قیف بالا (میلی‌متر):")
+    return TANK_CONE_TOP_THICKNESS
+
+
+async def tank_cone_top_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً ضخامت قیف بالا را عدد معتبر وارد کنید:")
+        return TANK_CONE_TOP_THICKNESS
+    context.user_data['tank_cone_top_thick_mm'] = float(text)
+    await update.message.reply_text("تعداد پایه‌ها (عدد صحیح):")
+    return TANK_SUPPORT_COUNT
+
+
+async def tank_support_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not text.isdigit() or int(text) == 0:
+        await update.message.reply_text("لطفاً تعداد پایه‌ها را عدد صحیح مثبت وارد کنید:")
+        return TANK_SUPPORT_COUNT
+    context.user_data['tank_support_count'] = int(text)
+    await update.message.reply_text("ارتفاع هر پایه (سانتی‌متر):")
+    return TANK_SUPPORT_HEIGHT
+
+
+async def tank_support_height(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً ارتفاع پایه را عدد معتبر وارد کنید:")
+        return TANK_SUPPORT_HEIGHT
+    context.user_data['tank_support_height_cm'] = float(text)
+    await update.message.reply_text("قطر پایه (اینچ):")
+    return TANK_SUPPORT_DIAMETER
+
+
+async def tank_support_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً قطر پایه را عدد مثبت وارد کنید:")
+        return TANK_SUPPORT_DIAMETER
+    context.user_data['tank_support_diameter_inch'] = float(text)
+    await update.message.reply_text("ضخامت پایه (میلی‌متر):")
+    return TANK_SUPPORT_THICKNESS
+
+
+async def tank_support_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً ضخامت پایه را عدد مثبت وارد کنید:")
+        return TANK_SUPPORT_THICKNESS
+    context.user_data['tank_support_thickness_mm'] = float(text)
+    await update.message.reply_text("درصد پرتی (%):")
+    return TANK_WASTE_PERCENT
+
+
+async def tank_waste_percent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً درصد پرتی را عدد معتبر وارد کنید:")
+        return TANK_WASTE_PERCENT
+    context.user_data['tank_waste_percent'] = float(text)
+    await update.message.reply_text("دستمزد ساخت به ازای هر کیلوگرم (تومان):")
+    return TANK_WAGE
+
+
+async def tank_wage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً دستمزد را عدد مثبت وارد کنید:")
+        return TANK_WAGE
+
+    data = context.user_data
+
     try:
-        diameter = float(update.message.text)
-        if diameter <= 0: raise ValueError
-        context.user_data['tank_p'] = {'diameter_cm': diameter}
-        await update.message.reply_text("✅ بسیار خب. ارتفاع بدنه (cm) را وارد کنید:")
-        return TANK_PRICING_HEIGHT
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً قطر را به صورت یک عدد مثبت (cm) وارد کنید.")
-        return TANK_PRICING_DIAMETER
+        d_m = data['tank_diameter_cm'] / 100
+        h_cyl_m = data['tank_height_cm'] / 100
+        t_cyl_m = data['tank_thickness_mm'] / 1000
 
-async def tank_pricing_height(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        height = float(update.message.text)
-        if height <= 0: raise ValueError
-        context.user_data['tank_p']['height_cm'] = height
-        await update.message.reply_text("✅ بسیار خب. ضخامت بدنه (mm) را وارد کنید:")
-        return TANK_PRICING_THICKNESS_CYL
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ارتفاع را به صورت یک عدد مثبت (cm) وارد کنید.")
-        return TANK_PRICING_HEIGHT
+        h_cb_m = data['tank_cone_bottom_h_cm'] / 100
+        t_cb_m = data['tank_cone_bottom_thick_mm'] / 1000
 
-async def tank_pricing_thickness_cyl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        thickness = float(update.message.text)
-        if thickness <= 0: raise ValueError
-        context.user_data['tank_p']['thickness_cyl_mm'] = thickness
-        await update.message.reply_text("✅ بسیار خب. ارتفاع قیف پایین (cm) را وارد کنید:")
-        return TANK_PRICING_CONE_BOTTOM_H
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ضخامت را به صورت یک عدد مثبت (mm) وارد کنید.")
-        return TANK_PRICING_THICKNESS_CYL
+        h_ct_m = data['tank_cone_top_h_cm'] / 100
+        t_ct_m = data['tank_cone_top_thick_mm'] / 1000
 
-async def tank_pricing_cone_bottom_h(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        cone_h = float(update.message.text)
-        if cone_h < 0: raise ValueError
-        context.user_data['tank_p']['cone_bottom_h_cm'] = cone_h
-        await update.message.reply_text("✅ بسیار خب. ضخامت قیف پایین (mm) را وارد کنید:")
-        return TANK_PRICING_CONE_BOTTOM_THICK
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ارتفاع قیف را به صورت یک عدد (cm) وارد کنید.")
-        return TANK_PRICING_CONE_BOTTOM_H
+        support_count = data['tank_support_count']
+        support_height_m = data['tank_support_height_cm'] / 100
+        support_diameter_inch = data['tank_support_diameter_inch']
+        support_thickness_m = data['tank_support_thickness_mm'] / 1000
 
-async def tank_pricing_cone_bottom_thick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        thickness = float(update.message.text)
-        if thickness < 0: raise ValueError
-        context.user_data['tank_p']['cone_bottom_thick_mm'] = thickness
-        await update.message.reply_text("✅ بسیار خب. ارتفاع قیف بالا (cm) را وارد کنید (اگر ندارد 0 وارد کنید):")
-        return TANK_PRICING_CONE_TOP_H
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ضخامت قیف را به صورت یک عدد (mm) وارد کنید.")
-        return TANK_PRICING_CONE_BOTTOM_THICK
+        waste_percent = data['tank_waste_percent']
+        wage_per_kg = float(text)
 
-async def tank_pricing_cone_top_h(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        cone_h = float(update.message.text)
-        if cone_h < 0: raise ValueError
-        context.user_data['tank_p']['cone_top_h_cm'] = cone_h
-        await update.message.reply_text("✅ بسیار خب. ضخامت قیف بالا (mm) را وارد کنید:")
-        return TANK_PRICING_CONE_TOP_THICK
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ارتفاع قیف را به صورت یک عدد (cm) وارد کنید.")
-        return TANK_PRICING_CONE_TOP_H
+        # وزن بدنه استوانه‌ای (لایه ورق فولادی)
+        outer_radius = d_m / 2
+        inner_radius = outer_radius - t_cyl_m
+        # مساحت جانبی استوانه: محیط × ارتفاع
+        lateral_area_cyl = 2 * math.pi * outer_radius * h_cyl_m
+        volume_cyl = lateral_area_cyl * t_cyl_m  # حجم ورق
+        weight_cyl = volume_cyl * STEEL_DENSITY_KG_M3
 
-async def tank_pricing_cone_top_thick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        thickness = float(update.message.text)
-        if thickness < 0: raise ValueError
-        context.user_data['tank_p']['cone_top_thick_mm'] = thickness
-        await update.message.reply_text("✅ بسیار خب. تعداد پایه‌ها را وارد کنید:")
-        return TANK_PRICING_SUPPORT_COUNT
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ضخامت قیف را به صورت یک عدد (mm) وارد کنید.")
-        return TANK_PRICING_CONE_TOP_THICK
+        # قیف کف (مخروط ناقص) فرض شعاع کوچک = 0
+        # حجم مخروط = (1/3) * π * r^2 * h
+        volume_cone_bottom = (1/3) * math.pi * (outer_radius ** 2) * h_cb_m
+        weight_cone_bottom = volume_cone_bottom * t_cb_m * STEEL_DENSITY_KG_M3
 
-async def tank_pricing_support_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        count = int(update.message.text)
-        if count < 0: raise ValueError
-        context.user_data['tank_p']['support_count'] = count
-        await update.message.reply_text("✅ بسیار خب. ارتفاع هر پایه (cm) را وارد کنید:")
-        return TANK_PRICING_SUPPORT_HEIGHT
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً تعداد پایه‌ها را به صورت یک عدد صحیح وارد کنید.")
-        return TANK_PRICING_SUPPORT_COUNT
+        # قیف بالا
+        volume_cone_top = (1/3) * math.pi * (outer_radius ** 2) * h_ct_m
+        weight_cone_top = volume_cone_top * t_ct_m * STEEL_DENSITY_KG_M3
 
-async def tank_pricing_support_height(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        height = float(update.message.text)
-        if height < 0: raise ValueError
-        context.user_data['tank_p']['support_height_cm'] = height
-        await update.message.reply_text("✅ بسیار خب. قطر هر پایه (inch) را وارد کنید:")
-        return TANK_PRICING_SUPPORT_DIAMETER
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ارتفاع پایه را به صورت یک عدد (cm) وارد کنید.")
-        return TANK_PRICING_SUPPORT_HEIGHT
+        # وزن پایه‌ها (لوله توخالی)
+        # محیط لوله = π * قطر بیرونی
+        # سطح جانبی = محیط × ارتفاع
+        # حجم لوله = سطح جانبی × ضخامت
+        support_diameter_m = support_diameter_inch * INCH_TO_M
+        circumference = math.pi * support_diameter_m
+        volume_per_support = circumference * support_height_m * support_thickness_m
+        weight_per_support = volume_per_support * STEEL_DENSITY_KG_M3
+        total_support_weight = weight_per_support * support_count
 
-async def tank_pricing_support_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        diameter = float(update.message.text)
-        if diameter < 0: raise ValueError
-        context.user_data['tank_p']['support_diameter_inch'] = diameter
-        await update.message.reply_text("✅ بسیار خب. ضخامت هر پایه (mm) را وارد کنید:")
-        return TANK_PRICING_SUPPORT_THICKNESS
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً قطر پایه را به صورت یک عدد (inch) وارد کنید.")
-        return TANK_PRICING_SUPPORT_DIAMETER
+        total_weight = weight_cyl + weight_cone_bottom + weight_cone_top + total_support_weight
+        total_weight_with_waste = total_weight * (1 + waste_percent / 100)
+        price = total_weight_with_waste * wage_per_kg
 
-async def tank_pricing_support_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        thickness = float(update.message.text)
-        if thickness < 0: raise ValueError
-        context.user_data['tank_p']['support_thickness_mm'] = thickness
-        await update.message.reply_text("✅ بسیار خب. درصد پرتی ورق (%) را وارد کنید:")
-        return TANK_PRICING_WASTE
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ضخامت پایه را به صورت یک عدد (mm) وارد کنید.")
-        return TANK_PRICING_SUPPORT_THICKNESS
-
-async def tank_pricing_waste(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        waste = float(update.message.text)
-        if waste < 0: raise ValueError
-        context.user_data['tank_p']['waste_percent'] = waste
-        await update.message.reply_text("✅ بسیار خب. دستمزد ساخت (تومان به ازای هر کیلوگرم) را وارد کنید:")
-        return TANK_PRICING_WAGE
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً درصد پرتی را به صورت یک عدد وارد کنید.")
-        return TANK_PRICING_WASTE
-
-async def tank_pricing_final_calculate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """محاسبه نهایی وزن و قیمت مخزن و ارسال نتیجه."""
-    try:
-        wage_per_kg = float(update.message.text)
-        if wage_per_kg < 0: raise ValueError
-        data = context.user_data['tank_p']
-        d_m = data['diameter_cm'] / 100
-        h_cyl_m = data['height_cm'] / 100
-        t_cyl_m = data['thickness_cyl_mm'] / 1000
-        h_cb_m = data['cone_bottom_h_cm'] / 100
-        t_cb_m = data['cone_bottom_thick_mm'] / 1000
-        h_ct_m = data['cone_top_h_cm'] / 100
-        t_ct_m = data['cone_top_thick_mm'] / 1000
-        support_count = data['support_count']
-        support_h_m = data['support_height_cm'] / 100
-        support_d_inch = data['support_diameter_inch']
-        support_t_mm = data['support_thickness_mm']
-        radius_m = d_m / 2
-        cyl_area = math.pi * d_m * h_cyl_m
-        weight_cyl = cyl_area * t_cyl_m * STEEL_DENSITY_KG_M3
-        weight_cb = 0
-        if h_cb_m > 0:
-            slant_cb = math.sqrt(radius_m**2 + h_cb_m**2)
-            area_cb = math.pi * radius_m * slant_cb
-            weight_cb = area_cb * t_cb_m * STEEL_DENSITY_KG_M3
-        weight_ct = 0
-        if h_ct_m > 0:
-            slant_ct = math.sqrt(radius_m**2 + h_ct_m**2)
-            area_ct = math.pi * radius_m * slant_ct
-            weight_ct = area_ct * t_ct_m * STEEL_DENSITY_KG_M3
-        weight_supports = 0
-        if support_count > 0:
-            weight_one_support = _calculate_pipe_weight(support_h_m, support_d_inch, support_t_mm)
-            weight_supports = weight_one_support * support_count
-        total_weight = weight_cyl + weight_cb + weight_ct + weight_supports
-        weight_with_waste = total_weight * (1 + data['waste_percent'] / 100)
-        total_price = weight_with_waste * wage_per_kg
-        response = "📊 **نتایج قیمت‌گذاری مخزن** 📊\n\n"
-        response += f"🔹 وزن بدنه استوانه‌ای: `{int(weight_cyl)}` کیلوگرم\n"
-        response += f"🔹 وزن قیف پایین: `{int(weight_cb)}` کیلوگرم\n"
-        response += f"🔹 وزن قیف بالا: `{int(weight_ct)}` کیلوگرم\n"
-        response += f"🔹 وزن پایه‌ها: `{int(weight_supports)}` کیلوگرم\n"
-        response += "-----------------------------------\n"
-        response += f"🔸 **وزن کلی (بدون پرتی):** `{int(total_weight)}` کیلوگرم\n"
-        response += f"🔸 **وزن کلی (با پرتی):** `{int(weight_with_waste)}` کیلوگرم\n\n"
-        response += f"💰 **قیمت کل (با دستمزد):** `{int(total_price):,}` تومان"
-        await update.message.reply_text(response, parse_mode='Markdown')
-        context.user_data.clear()
-        return END
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً دستمزد را به صورت یک عدد معتبر وارد کنید.")
-        return TANK_PRICING_WAGE
+        # خروجی
+        msg = (
+            f"وزن بدنه استوانه‌ای مخزن: {int(weight_cyl)} کیلوگرم\n"
+            f"وزن قیف کف: {int(weight_cone_bottom)} کیلوگرم\n"
+            f"وزن قیف بالا: {int(weight_cone_top)} کیلوگرم\n"
+            f"وزن کل پایه‌ها: {int(total_support_weight)} کیلوگرم\n"
+            f"وزن کل بدون پرتی: {int(total_weight)} کیلوگرم\n"
+            f"وزن کل با پرتی ({waste_percent}%): {int(total_weight_with_waste)} کیلوگرم\n"
+            f"قیمت کل (با احتساب دستمزد): {int(price)} تومان"
+        )
+        await update.message.reply_text(msg)
     except Exception as e:
-        await update.message.reply_text(f"یک خطای غیرمنتظره در محاسبات رخ داد: {e}")
-        context.user_data.clear()
-        return END
+        await update.message.reply_text(f"خطا در محاسبه: {e}")
 
-# --- محاسبه ابعاد مخزن ---
-async def tank_calc_orientation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    orient = query.data
-    context.user_data['tank_c'] = {'orientation': orient}
-    keyboard = [
-        [InlineKeyboardButton("حجم (لیتر)", callback_data='volume')],
-        [InlineKeyboardButton("طول بدنه (cm)", callback_data='length')],
-        [InlineKeyboardButton("قطر بدنه (cm)", callback_data='diameter')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    text = f"مخزن {'عمودی' if orient == 'vertical' else 'افقی'} انتخاب شد.\n\n"
-    text += "چه مقداری را می‌خواهید محاسبه کنید؟"
-    await query.edit_message_text(text, reply_markup=reply_markup)
-    return TANK_CALC_CHOICE
-
-async def tank_calc_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    find = query.data
-    context.user_data['tank_c']['find'] = find
-    if find == 'volume':
-        await query.edit_message_text("محاسبه حجم انتخاب شد.\n\nلطفاً قطر مخزن (cm) را وارد کنید:")
-        return TANK_AWAITING_DIAMETER
-    elif find == 'length':
-        await query.edit_message_text("محاسبه طول انتخاب شد.\n\nلطفاً قطر مخزن (cm) را وارد کنید:")
-        return TANK_AWAITING_DIAMETER
-    elif find == 'diameter':
-        await query.edit_message_text("محاسبه قطر انتخاب شد.\n\nلطفاً طول بدنه مخزن (cm) را وارد کنید:")
-        return TANK_AWAITING_LENGTH
     return END
 
-async def tank_calc_get_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val <= 0: raise ValueError
-        context.user_data['tank_c']['diameter_m'] = val / 100
-        find = context.user_data['tank_c']['find']
-        if find == 'volume':
-            await update.message.reply_text("✅ بسیار خب. طول بدنه مخزن (cm) را وارد کنید:")
-            return TANK_AWAITING_LENGTH
-        elif find == 'length':
-            await update.message.reply_text("✅ بسیار خب. حجم کل مخزن (لیتر) را وارد کنید:")
-            return TANK_AWAITING_VOLUME
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً قطر را به صورت یک عدد مثبت (cm) وارد کنید.")
-        return TANK_AWAITING_DIAMETER
-    return END
 
-async def tank_calc_get_length(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val <= 0: raise ValueError
-        context.user_data['tank_c']['length_m'] = val / 100
-        find = context.user_data['tank_c']['find']
-        if find == 'volume':
-            await update.message.reply_text("✅ بسیار خب. ارتفاع قیف پایین (cm) را وارد کنید:")
-            return TANK_AWAITING_BOTTOM_H
-        elif find == 'diameter':
-            await update.message.reply_text("✅ بسیار خب. حجم کل مخزن (لیتر) را وارد کنید:")
-            return TANK_AWAITING_VOLUME
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً طول را به صورت یک عدد مثبت (cm) وارد کنید.")
-        return TANK_AWAITING_LENGTH
-    return END
+# --- سیلو ---
+async def silo_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً قطر سیلو را عدد مثبت و غیر صفر وارد کنید:")
+        return SILO_DIAMETER
+    context.user_data['silo_diameter_cm'] = float(text)
+    await update.message.reply_text("ارتفاع سیلو (سانتی‌متر):")
+    return SILO_HEIGHT
 
-async def tank_calc_get_volume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val <= 0: raise ValueError
-        context.user_data['tank_c']['volume_m3'] = val / 1000
-        await update.message.reply_text("✅ بسیار خب. ارتفاع قیف پایین (cm) را وارد کنید:")
-        return TANK_AWAITING_BOTTOM_H
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً حجم را به صورت یک عدد مثبت (لیتر) وارد کنید.")
-        return TANK_AWAITING_VOLUME
-    return END
-    
-async def tank_calc_get_bottom_h(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val < 0: raise ValueError
-        context.user_data['tank_c']['bottom_h_m'] = val / 100
-        if context.user_data['tank_c']['orientation'] == 'vertical':
-            context.user_data['tank_c']['top_h_m'] = 0
-            return await tank_perform_calculation(update, context)
-        else:
-            await update.message.reply_text("✅ بسیار خب. ارتفاع قیف بالا/عقب (cm) را وارد کنید:")
-            return TANK_AWAITING_TOP_H
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ارتفاع قیف را به صورت یک عدد (cm) وارد کنید.")
-        return TANK_AWAITING_BOTTOM_H
 
-async def tank_calc_get_top_h(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val < 0: raise ValueError
-        context.user_data['tank_c']['top_h_m'] = val / 100
-        return await tank_perform_calculation(update, context)
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ارتفاع قیف را به صورت یک عدد (cm) وارد کنید.")
-        return TANK_AWAITING_TOP_H
+async def silo_height(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً ارتفاع سیلو را عدد معتبر وارد کنید:")
+        return SILO_HEIGHT
+    context.user_data['silo_height_cm'] = float(text)
+    await update.message.reply_text("ضخامت ورق سیلو (میلی‌متر):")
+    return SILO_THICKNESS
 
-async def tank_perform_calculation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """تابع نهایی برای انجام محاسبات ابعاد مخزن."""
-    data = context.user_data['tank_c']
-    find = data['find']
+
+async def silo_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً ضخامت ورق سیلو را عدد مثبت وارد کنید:")
+        return SILO_THICKNESS
+    context.user_data['silo_thickness_mm'] = float(text)
+    await update.message.reply_text("ارتفاع قیف سیلو (سانتی‌متر):")
+    return SILO_CONE_HEIGHT
+
+
+async def silo_cone_height(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً ارتفاع قیف را عدد معتبر وارد کنید:")
+        return SILO_CONE_HEIGHT
+    context.user_data['silo_cone_h_cm'] = float(text)
+    await update.message.reply_text("ضخامت ورق قیف سیلو (میلی‌متر):")
+    return SILO_CONE_THICKNESS
+
+
+async def silo_cone_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً ضخامت ورق قیف را عدد مثبت وارد کنید:")
+        return SILO_CONE_THICKNESS
+    context.user_data['silo_cone_thick_mm'] = float(text)
+    await update.message.reply_text("تعداد پایه‌ها (عدد صحیح):")
+    return SILO_SUPPORT_COUNT
+
+
+async def silo_support_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not text.isdigit() or int(text) == 0:
+        await update.message.reply_text("لطفاً تعداد پایه‌ها را عدد صحیح مثبت وارد کنید:")
+        return SILO_SUPPORT_COUNT
+    context.user_data['silo_support_count'] = int(text)
+    await update.message.reply_text("ارتفاع هر پایه (سانتی‌متر):")
+    return SILO_SUPPORT_HEIGHT
+
+
+async def silo_support_height(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً ارتفاع پایه را عدد معتبر وارد کنید:")
+        return SILO_SUPPORT_HEIGHT
+    context.user_data['silo_support_height_cm'] = float(text)
+    await update.message.reply_text("قطر پایه (اینچ):")
+    return SILO_SUPPORT_DIAMETER
+
+
+async def silo_support_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً قطر پایه را عدد مثبت وارد کنید:")
+        return SILO_SUPPORT_DIAMETER
+    context.user_data['silo_support_diameter_inch'] = float(text)
+    await update.message.reply_text("ضخامت پایه (میلی‌متر):")
+    return SILO_SUPPORT_THICKNESS
+
+
+async def silo_support_thickness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً ضخامت پایه را عدد مثبت وارد کنید:")
+        return SILO_SUPPORT_THICKNESS
+    context.user_data['silo_support_thickness_mm'] = float(text)
+    await update.message.reply_text("درصد پرتی (%):")
+    return SILO_WASTE_PERCENT
+
+
+async def silo_waste_percent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text):
+        await update.message.reply_text("لطفاً درصد پرتی را عدد معتبر وارد کنید:")
+        return SILO_WASTE_PERCENT
+    context.user_data['silo_waste_percent'] = float(text)
+    await update.message.reply_text("دستمزد ساخت به ازای هر کیلوگرم (تومان):")
+    return SILO_WAGE
+
+
+async def silo_wage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if not is_positive_number(text) or float(text) == 0:
+        await update.message.reply_text("لطفاً دستمزد را عدد مثبت وارد کنید:")
+        return SILO_WAGE
+
+    data = context.user_data
+
     try:
-        if find == 'volume':
-            r = data['diameter_m'] / 2
-            L = data['length_m']
-            h_b = data['bottom_h_m']
-            h_t = data['top_h_m']
-            vol_cyl = math.pi * r**2 * L
-            vol_cone_b = (1/3) * math.pi * r**2 * h_b
-            vol_cone_t = (1/3) * math.pi * r**2 * h_t
-            total_vol_m3 = vol_cyl + vol_cone_b + vol_cone_t
-            total_vol_liters = total_vol_m3 * 1000
-            await update.message.reply_text(f"✅ **نتیجه:** حجم کل مخزن `{total_vol_liters:,.2f}` لیتر است.", parse_mode='Markdown')
-        elif find == 'length':
-            r = data['diameter_m'] / 2
-            V = data['volume_m3']
-            h_b = data['bottom_h_m']
-            h_t = data['top_h_m']
-            vol_cone_b = (1/3) * math.pi * r**2 * h_b
-            vol_cone_t = (1/3) * math.pi * r**2 * h_t
-            vol_cyl_needed = V - vol_cone_b - vol_cone_t
-            if vol_cyl_needed < 0 or r == 0:
-                await update.message.reply_text("خطا: با این ورودی‌ها، حجم قیف‌ها از حجم کل بیشتر است!")
-            else:
-                L_calc_m = vol_cyl_needed / (math.pi * r**2)
-                await update.message.reply_text(f"✅ **نتیجه:** طول بدنه مخزن `{L_calc_m * 100:.2f}` سانتی‌متر است.", parse_mode='Markdown')
-        elif find == 'diameter':
-            L = data['length_m']
-            V = data['volume_m3']
-            h_b = data['bottom_h_m']
-            h_t = data['top_h_m']
-            denominator = math.pi * (L + h_b/3 + h_t/3)
-            if denominator <= 0:
-                await update.message.reply_text("خطا: با این ورودی‌ها محاسبه قطر ممکن نیست.")
-            else:
-                r_sq = V / denominator
-                if r_sq < 0:
-                    await update.message.reply_text("خطا: مقادیر ورودی منجر به قطر نامعتبر می‌شود.")
-                else:
-                    d_calc_m = 2 * math.sqrt(r_sq)
-                    await update.message.reply_text(f"✅ **نتیجه:** قطر بدنه مخزن `{d_calc_m * 100:.2f}` سانتی‌متر است.", parse_mode='Markdown')
+        d_m = data['silo_diameter_cm'] / 100
+        h_m = data['silo_height_cm'] / 100
+        t_m = data['silo_thickness_mm'] / 1000
+
+        h_cone_m = data['silo_cone_h_cm'] / 100
+        t_cone_m = data['silo_cone_thick_mm'] / 1000
+
+        support_count = data['silo_support_count']
+        support_height_m = data['silo_support_height_cm'] / 100
+        support_diameter_inch = data['silo_support_diameter_inch']
+        support_thickness_m = data['silo_support_thickness_mm'] / 1000
+
+        waste_percent = data['silo_waste_percent']
+        wage_per_kg = float(text)
+
+        # وزن بدنه استوانه‌ای سیلو
+        outer_radius = d_m / 2
+        lateral_area_cyl = 2 * math.pi * outer_radius * h_m
+        volume_cyl = lateral_area_cyl * t_m
+        weight_cyl = volume_cyl * STEEL_DENSITY_KG_M3
+
+        # قیف سیلو (مخروط ناقص)
+        volume_cone = (1/3) * math.pi * (outer_radius ** 2) * h_cone_m
+        weight_cone = volume_cone * t_cone_m * STEEL_DENSITY_KG_M3
+
+        # وزن پایه‌ها
+        support_diameter_m = support_diameter_inch * INCH_TO_M
+        circumference = math.pi * support_diameter_m
+        volume_per_support = circumference * support_height_m * support_thickness_m
+        weight_per_support = volume_per_support * STEEL_DENSITY_KG_M3
+        total_support_weight = weight_per_support * support_count
+
+        total_weight = weight_cyl + weight_cone + total_support_weight
+        total_weight_with_waste = total_weight * (1 + waste_percent / 100)
+        price = total_weight_with_waste * wage_per_kg
+
+        msg = (
+            f"وزن بدنه استوانه‌ای سیلو: {int(weight_cyl)} کیلوگرم\n"
+            f"وزن قیف سیلو: {int(weight_cone)} کیلوگرم\n"
+            f"وزن کل پایه‌ها: {int(total_support_weight)} کیلوگرم\n"
+            f"وزن کل بدون پرتی: {int(total_weight)} کیلوگرم\n"
+            f"وزن کل با پرتی ({waste_percent}%): {int(total_weight_with_waste)} کیلوگرم\n"
+            f"قیمت کل (با احتساب دستمزد): {int(price)} تومان"
+        )
+        await update.message.reply_text(msg)
     except Exception as e:
-        await update.message.reply_text(f"یک خطای ناشناخته در محاسبه رخ داد: {e}")
-    context.user_data.clear()
+        await update.message.reply_text(f"خطا در محاسبه: {e}")
+
     return END
 
 
-# ==============================================================================
-# منطق و توابع مربوط به سیلو (SILO)
-# ==============================================================================
-
-# --- محاسبه ابعاد سیلو ---
-async def silo_calc_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    find = query.data
-    context.user_data['silo_c']['find'] = find
-    if find == 'capacity':
-        await query.edit_message_text("محاسبه ظرفیت انتخاب شد.\n\nلطفاً قطر سیلو (cm) را وارد کنید:")
-        return SILO_AWAITING_DIAMETER
-    elif find == 'length':
-        await query.edit_message_text("محاسبه ارتفاع استوانه انتخاب شد.\n\nلطفاً قطر سیلو (cm) را وارد کنید:")
-        return SILO_AWAITING_DIAMETER
-    elif find == 'diameter':
-        await query.edit_message_text("محاسبه قطر انتخاب شد.\n\nلطفاً ارتفاع استوانه سیلو (cm) را وارد کنید:")
-        return SILO_AWAITING_LENGTH
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("عملیات لغو شد.", reply_markup=ReplyKeyboardRemove())
     return END
 
-async def silo_calc_get_diameter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val <= 0: raise ValueError
-        context.user_data['silo_c']['diameter_m'] = val / 100
-        find = context.user_data['silo_c']['find']
-        if find == 'capacity':
-            await update.message.reply_text("✅ بسیار خب. ارتفاع استوانه سیلو (cm) را وارد کنید:")
-            return SILO_AWAITING_LENGTH
-        elif find == 'length':
-            await update.message.reply_text("✅ بسیار خب. ظرفیت کل سیلو (تُن) را وارد کنید:")
-            return SILO_AWAITING_CAPACITY
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً قطر را به صورت یک عدد مثبت (cm) وارد کنید.")
-        return SILO_AWAITING_DIAMETER
-    return END
 
-async def silo_calc_get_length(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val <= 0: raise ValueError
-        context.user_data['silo_c']['length_m'] = val / 100
-        find = context.user_data['silo_c']['find']
-        if find == 'capacity':
-            await update.message.reply_text("✅ بسیار خب. ارتفاع قیف پایین (cm) را وارد کنید:")
-            return SILO_AWAITING_BOTTOM_H
-        elif find == 'diameter':
-            await update.message.reply_text("✅ بسیار خب. ظرفیت کل سیلو (تُن) را وارد کنید:")
-            return SILO_AWAITING_CAPACITY
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ارتفاع را به صورت یک عدد مثبت (cm) وارد کنید.")
-        return SILO_AWAITING_LENGTH
-    return END
+def main() -> None:
+    app = ApplicationBuilder().token("YOUR_BOT_TOKEN_HERE").build()
 
-async def silo_calc_get_capacity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val <= 0: raise ValueError
-        context.user_data['silo_c']['volume_m3'] = (val * 1000) / CEMENT_DENSITY_KG_M3
-        await update.message.reply_text("✅ بسیار خب. ارتفاع قیف پایین (cm) را وارد کنید:")
-        return SILO_AWAITING_BOTTOM_H
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ظرفیت را به صورت یک عدد مثبت (تُن) وارد کنید.")
-        return SILO_AWAITING_CAPACITY
-    return END
-    
-async def silo_calc_get_bottom_h(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val < 0: raise ValueError
-        context.user_data['silo_c']['bottom_h_m'] = val / 100
-        await update.message.reply_text("✅ بسیار خب. ارتفاع قیف بالا (cm) را وارد کنید:")
-        return SILO_AWAITING_TOP_H
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ارتفاع قیف را به صورت یک عدد (cm) وارد کنید.")
-        return SILO_AWAITING_BOTTOM_H
-
-async def silo_calc_get_top_h(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        val = float(update.message.text)
-        if val < 0: raise ValueError
-        context.user_data['silo_c']['top_h_m'] = val / 100
-        return await silo_perform_calculation(update, context)
-    except (ValueError, TypeError):
-        await update.message.reply_text("خطا: لطفاً ارتفاع قیف را به صورت یک عدد (cm) وارد کنید.")
-        return SILO_AWAITING_TOP_H
-
-async def silo_perform_calculation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """تابع نهایی برای انجام محاسبات ابعاد سیلو."""
-    data = context.user_data['silo_c']
-    find = data['find']
-    try:
-        if find == 'capacity':
-            r = data['diameter_m'] / 2
-            L = data['length_m']
-            h_b = data['bottom_h_m']
-            h_t = data['top_h_m']
-            vol_cyl = math.pi * r**2 * L
-            vol_cone_b = (1/3) * math.pi * r**2 * h_b
-            vol_cone_t = (1/3) * math.pi * r**2 * h_t
-            total_vol_m3 = vol_cyl + vol_cone_b + vol_cone_t
-            total_capacity_ton = (total_vol_m3 * CEMENT_DENSITY_KG_M3) / 1000
-            await update.message.reply_text(f"✅ **نتیجه:** ظرفیت کل سیلو `{total_capacity_ton:,.2f}` تُن است.", parse_mode='Markdown')
-        elif find == 'length':
-            r = data['diameter_m'] / 2
-            V = data['volume_m3']
-            h_b = data['bottom_h_m']
-            h_t = data['top_h_m']
-            vol_cone_b = (1/3) * math.pi * r**2 * h_b
-            vol_cone_t = (1/3) * math.pi * r**2 * h_t
-            vol_cyl_needed = V - vol_cone_b - vol_cone_t
-            if vol_cyl_needed < 0 or r == 0:
-                await update.message.reply_text("خطا: حجم قیف‌ها از ظرفیت کل بیشتر است!")
-            else:
-                L_calc_m = vol_cyl_needed / (math.pi * r**2)
-                await update.message.reply_text(f"✅ **نتیجه:** ارتفاع استوانه سیلو `{L_calc_m * 100:.2f}` سانتی‌متر است.", parse_mode='Markdown')
-        elif find == 'diameter':
-            L = data['length_m']
-            V = data['volume_m3']
-            h_b = data['bottom_h_m']
-            h_t = data['top_h_m']
-            denominator = math.pi * (L + h_b/3 + h_t/3)
-            if denominator <= 0:
-                await update.message.reply_text("خطا: با این ورودی‌ها محاسبه قطر ممکن نیست.")
-            else:
-                r_sq = V / denominator
-                if r_sq < 0:
-                    await update.message.reply_text("خطا: مقادیر ورودی منجر به قطر نامعتبر می‌شود.")
-                else:
-                    d_calc_m = 2 * math.sqrt(r_sq)
-                    await update.message.reply_text(f"✅ **نتیجه:** قطر سیلو `{d_calc_m * 100:.2f}` سانتی‌متر است.", parse_mode='Markdown')
-    except Exception as e:
-        await update.message.reply_text(f"یک خطای ناشناخته در محاسبه رخ داد: {e}")
-    context.user_data.clear()
-    return END
-
-# ==============================================================================
-# مدیریت خطاهای کلی
-# ==============================================================================
-
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """خطاها را لاگ کرده و یک پیام کاربرپسند ارسال می‌کند."""
-    print(f"Update '{update}' caused error '{context.error}'")
-
-# ==============================================================================
-# بخش اصلی برنامه و وب‌هوک
-# ==============================================================================
-
-def main() -> Application:
-    """برنامه ربات را ساخته و نمونه آن را برمی‌گرداند."""
-    application = ApplicationBuilder().token(TOKEN).build()
-    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            SELECTING_COMPONENT: [
-                CallbackQueryHandler(select_component, pattern="^component_(tank|silo)$")
-            ],
-            SELECTING_TASK: [
-                CallbackQueryHandler(select_task, pattern="^task_(pricing|calc)$|^back_to_start$")
-            ],
-            TANK_PRICING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_diameter)],
-            TANK_PRICING_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_height)],
-            TANK_PRICING_THICKNESS_CYL: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_thickness_cyl)],
-            TANK_PRICING_CONE_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_bottom_h)],
-            TANK_PRICING_CONE_BOTTOM_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_bottom_thick)],
-            TANK_PRICING_CONE_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_top_h)],
-            TANK_PRICING_CONE_TOP_THICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_cone_top_thick)],
-            TANK_PRICING_SUPPORT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_count)],
-            TANK_PRICING_SUPPORT_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_height)],
-            TANK_PRICING_SUPPORT_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_diameter)],
-            TANK_PRICING_SUPPORT_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_support_thickness)],
-            TANK_PRICING_WASTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_waste)],
-            TANK_PRICING_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_pricing_final_calculate)],
-            TANK_CALC_ORIENTATION: [CallbackQueryHandler(tank_calc_orientation, pattern="^(vertical|horizontal)$")],
-            TANK_CALC_CHOICE: [CallbackQueryHandler(tank_calc_choice, pattern="^(volume|length|diameter)$")],
-            TANK_AWAITING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_diameter)],
-            TANK_AWAITING_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_length)],
-            TANK_AWAITING_VOLUME: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_volume)],
-            TANK_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_bottom_h)],
-            TANK_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_calc_get_top_h)],
-            SILO_CALC_CHOICE: [CallbackQueryHandler(silo_calc_choice, pattern="^(capacity|length|diameter)$")],
-            SILO_AWAITING_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_diameter)],
-            SILO_AWAITING_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_length)],
-            SILO_AWAITING_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_capacity)],
-            SILO_AWAITING_BOTTOM_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_bottom_h)],
-            SILO_AWAITING_TOP_H: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_calc_get_top_h)],
+            CHOOSE_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_type)],
+
+            # مخزن
+            TANK_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_diameter)],
+            TANK_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_height)],
+            TANK_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_thickness)],
+            TANK_CONE_BOTTOM_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_cone_bottom_height)],
+            TANK_CONE_BOTTOM_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_cone_bottom_thickness)],
+            TANK_CONE_TOP_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_cone_top_height)],
+            TANK_CONE_TOP_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_cone_top_thickness)],
+            TANK_SUPPORT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_support_count)],
+            TANK_SUPPORT_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_support_height)],
+            TANK_SUPPORT_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_support_diameter)],
+            TANK_SUPPORT_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_support_thickness)],
+            TANK_WASTE_PERCENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_waste_percent)],
+            TANK_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_wage)],
+
+            # سیلو
+            SILO_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_diameter)],
+            SILO_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_height)],
+            SILO_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_thickness)],
+            SILO_CONE_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_cone_height)],
+            SILO_CONE_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_cone_thickness)],
+            SILO_SUPPORT_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_support_count)],
+            SILO_SUPPORT_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_support_height)],
+            SILO_SUPPORT_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_support_diameter)],
+            SILO_SUPPORT_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_support_thickness)],
+            SILO_WASTE_PERCENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_waste_percent)],
+            SILO_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_wage)],
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    application.add_handler(conv_handler)
-    application.add_error_handler(error_handler)
-    
-    # ❗️ مقداردهی اولیه به Application
-    # این خط مشکل Runtimeerror را حل می‌کند.
-    application.initialize()
-    
-    return application
+    app.add_handler(conv_handler)
+    app.run_polling()
 
-# ==============================================================================
-# اجرای برنامه
-# ==============================================================================
-
-app = Flask(__name__)
-TOKEN = "8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY"
-telegram_application = Application.builder().token(TOKEN).build()
-
-@app.before_first_request
-async def init_bot():
-    await telegram_application.initialize()
-    await telegram_application.start()
-
-@app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook_handler():
-    data = request.get_json(force=True)
-    update = Update.de_json(data, telegram_application.bot)
-    await telegram_application.process_update(update)
-    return "ok"
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    main()
