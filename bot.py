@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
     WAGE_PER_KG,
     FINAL_RESULT,
     RESTART,
-) = range(16)
+) = range(17)
 
 # چگالی فولاد کیلوگرم بر متر مکعب
 STEEL_DENSITY = 7850
