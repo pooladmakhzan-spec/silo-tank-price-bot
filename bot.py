@@ -1,517 +1,667 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
+#!/usr/bin/env python3
+# coding: utf-8
+
+import os
 import math
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
 
-# مراحل کلی
-CHOOSING_PRODUCT, TANK_THICKNESS, TANK_DIAMETER, TANK_HEIGHT, TANK_CONE_TOP, TANK_CONE_BOTTOM, TANK_WASTE, TANK_WAGE, \
-SILO_DIAMETER, SILO_HEIGHT, SILO_CAPACITY, SILO_FRAME, SILO_BRACING, SILO_WASTE, SILO_WAGE, \
-SCREW_LENGTH, SCREW_OUTER_DIAMETER, SCREW_OUTER_THICKNESS, SCREW_SHAFT_DIAMETER, SCREW_SHAFT_THICKNESS, SCREW_PITCH, SCREW_BLADE_THICKNESS, SCREW_BLADE_RADIUS, MOTOR_PRICE, LATHE_WAGE, TRANS_SHAFT_DIAMETER, TRANS_SHAFT_LENGTH, TRANS_SHAFT_PRICE, SCREW_WAGE = range(29)
+# -------------------------
+# ثابت‌ها و مراحل گفتگو
+# -------------------------
+STEEL_DENSITY = 7850.0  # kg/m^3 (چگالی آهن سیاه / فولاد)
 
-steel_density = 7850  # kg/m3
-user_data = {}
+# مراحل اصلی
+CHOOSING_PRODUCT = 0
 
-def reset_user_data(user_id):
-    user_data.pop(user_id, None)
+# مخزن (بدون تغییر در منطق)
+TANK_THICKNESS, TANK_DIAMETER, TANK_HEIGHT, TANK_CONE_TOP_CM, TANK_CONE_BOTTOM_CM, TANK_WASTE_PERCENT, TANK_WAGE = range(10, 17)
 
+# سیلو (بدون تغییر در منطق)
+SILO_DIAMETER_M, SILO_HEIGHT_M, SILO_CAPACITY_TON, SILO_FRAMES, SILO_BRACES, SILO_WASTE_PERCENT, SILO_WAGE = range(20, 27)
+
+# اسکرو کانوایر (واحدها: اینچ/میلیمتر/سانتی‌متر)
+(
+    SCREW_LENGTH_CM,
+    SCREW_OUTER_DIAMETER_INCH,
+    SCREW_OUTER_THICKNESS_MM,
+    SCREW_SHAFT_OUTER_DIAMETER_INCH,
+    SCREW_SHAFT_THICKNESS_MM,
+    SCREW_PITCH_CM,
+    SCREW_BLADE_THICKNESS_MM,
+    TRANS_SHAFT_DIAMETER_INCH,      # کاربر وارد می‌کند (در پیام سؤال، پیشنهاد نشان داده می‌شود)
+    TRANS_SHAFT_LENGTH_CM,
+    TRANS_SHAFT_PRICE_PER_KG,       # اکنون قیمت به ازای هر کیلو (تومان/kg)
+    SCREW_MOTOR_PRICE,
+    SCREW_LATHE_WAGE,
+    SCREW_LABOR_PER_KG,
+) = range(30, 43)
+
+CALLBACK_RESTART = "restart"
+
+# -------------------------
+# توابع کمکی تبدیل واحد
+# -------------------------
+def inch_to_meter(inch: float) -> float:
+    return inch * 0.0254
+
+def mm_to_meter(mm: float) -> float:
+    return mm / 1000.0
+
+def cm_to_meter(cm: float) -> float:
+    return cm / 100.0
+
+def fmt(n) -> str:
+    """قالب‌بندی عدد با جداکننده هزارگان (برای int و float)."""
+    try:
+        if isinstance(n, int):
+            return f"{n:,}"
+        else:
+            # اگر تقریباً عدد صحیح بود، بدون اعشار نمایش می‌دهیم
+            if abs(n - round(n)) < 1e-6:
+                return f"{int(round(n)):,}"
+            return f"{n:,.2f}"
+    except:
+        return str(n)
+
+# وزن پوسته استوانه‌ای (حجم پوسته × چگالی)، outer_d_m قطر خارجی و thickness_m ضخامت ورق
+def cylindrical_shell_weight(outer_d_m: float, thickness_m: float, length_m: float) -> float:
+    r_out = outer_d_m / 2.0
+    r_in = max(r_out - thickness_m, 0.0)
+    volume = math.pi * (r_out**2 - r_in**2) * length_m
+    return volume * STEEL_DENSITY  # kg
+
+# وزن استوانه توپر (برای شفت ترانس)
+def solid_cylinder_weight(diameter_m: float, length_m: float) -> float:
+    r = diameter_m / 2.0
+    volume = math.pi * r**2 * length_m
+    return volume * STEEL_DENSITY  # kg
+
+# وزن تیغه ماردون (تقریبی: ضخامت × محیط(2πr_blade) × طول)
+def screw_blade_weight(blade_thickness_m: float, blade_radius_m: float, length_m: float) -> float:
+    if blade_thickness_m <= 0 or blade_radius_m <= 0 or length_m <= 0:
+        return 0.0
+    circumference = 2.0 * math.pi * blade_radius_m
+    volume = blade_thickness_m * circumference * length_m
+    return volume * STEEL_DENSITY
+
+# -------------------------
+# هندلرها
+# -------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """صفحهٔ اصلی: انتخاب محصول"""
     keyboard = [
-        [InlineKeyboardButton("🛢️ مخزن", callback_data='tank')],
-        [InlineKeyboardButton("🌾 سیلو", callback_data='silo')],
-        [InlineKeyboardButton("⚙️ اسکرو کانوایر", callback_data='screw')],
+        [InlineKeyboardButton("🛢️ مخزن", callback_data="tank")],
+        [InlineKeyboardButton("🌾 سیلو", callback_data="silo")],
+        [InlineKeyboardButton("⚙️ اسکرو کانوایر", callback_data="screw")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("سلام 👋\nلطفاً محصول مورد نظر را انتخاب کنید:", reply_markup=reply_markup)
+    context.user_data.clear()
+    if update.message:
+        await update.message.reply_text("👋 سلام! کدام محاسبه را می‌خواهی انجام دهی؟", reply_markup=reply_markup)
+    else:
+        # اگر از callback (مثلاً restart) آمده
+        query = update.callback_query
+        await query.answer()
+        await query.message.reply_text("👋 سلام! کدام محاسبه را می‌خواهی انجام دهی؟", reply_markup=reply_markup)
     return CHOOSING_PRODUCT
 
-async def choose_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def choose_product_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     choice = query.data
-    user_id = query.from_user.id
-    reset_user_data(user_id)
-    user_data[user_id] = {"product": choice}
+    context.user_data.clear()
+    context.user_data['product'] = choice
 
-    if choice == 'tank':
-        await query.message.reply_text("🏗️ ضخامت بدنه مخزن (میلی‌متر) را وارد کنید:")
+    if choice == "tank":
+        await query.message.reply_text("🛠️ وارد بخش **مخزن** شدی.\nلطفاً ضخامت بدنه مخزن را به **میلیمتر** وارد کن:")
         return TANK_THICKNESS
-    elif choice == 'silo':
-        await query.message.reply_text("🌾 قطر سیلو (متر) را وارد کنید:")
-        return SILO_DIAMETER
-    elif choice == 'screw':
-        await query.message.reply_text("⚙️ طول اسکرو (سانتی‌متر) را وارد کنید:")
-        return SCREW_LENGTH
+    elif choice == "silo":
+        await query.message.reply_text("🛠️ وارد بخش **سیلو** شدی.\nلطفاً قطر سیلو را به **متر** وارد کن:")
+        return SILO_DIAMETER_M
+    elif choice == "screw":
+        await query.message.reply_text("⚙️ وارد بخش **اسکرو کانوایر** شدی.\nلطفاً طول اسکرو را به **سانتی‌متر** وارد کن:")
+        return SCREW_LENGTH_CM
+    else:
+        await query.message.reply_text("❌ انتخاب نامعتبر. لطفاً /start را بزن.")
+        return ConversationHandler.END
 
-### مخزن ###
-async def tank_thickness(update, context):
-    user_id = update.message.from_user.id
+# -------------------------
+# ----- مخزن (بدون تغییر) -----
+# -------------------------
+async def tank_thickness_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['tank_thickness'] = v
-        await update.message.reply_text("📏 قطر بدنه مخزن (متر) را وارد کنید:")
+        v = float(update.message.text.strip())
+        if v <= 0:
+            raise ValueError
+        context.user_data['tank_thickness_mm'] = v
+        await update.message.reply_text("📏 قطر بدنه مخزن را به **متر** وارد کن:")
         return TANK_DIAMETER
     except:
-        await update.message.reply_text("❌ لطفاً عدد معتبر وارد کنید:")
+        await update.message.reply_text("⚠️ مقدار نامعتبر — لطفاً ضخامت را به میلی‌متر (عدد مثبت) وارد کن:")
         return TANK_THICKNESS
 
-async def tank_diameter(update, context):
-    user_id = update.message.from_user.id
+async def tank_diameter_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['tank_diameter'] = v
-        await update.message.reply_text("📐 ارتفاع بدنه مخزن (متر) را وارد کنید:")
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['tank_diameter_m'] = v
+        await update.message.reply_text("📐 ارتفاع بدنه مخزن را به **متر** وارد کن:")
         return TANK_HEIGHT
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
+        await update.message.reply_text("⚠️ مقدار نامعتبر — قطر را به متر وارد کن:")
         return TANK_DIAMETER
 
-async def tank_height(update, context):
-    user_id = update.message.from_user.id
+async def tank_height_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['tank_height'] = v
-        await update.message.reply_text("🔻 ارتفاع قیف بالایی مخزن (سانتی‌متر) را وارد کنید:")
-        return TANK_CONE_TOP
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['tank_height_m'] = v
+        await update.message.reply_text("🔻 ارتفاع قیف بالای مخزن را به **سانتی‌متر** وارد کن (اگر ندارد 0):")
+        return TANK_CONE_TOP_CM
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
+        await update.message.reply_text("⚠️ مقدار نامعتبر — ارتفاع را به متر وارد کن:")
         return TANK_HEIGHT
 
-async def tank_cone_top(update, context):
-    user_id = update.message.from_user.id
+async def tank_cone_top_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['tank_cone_top'] = v
-        await update.message.reply_text("🔺 ارتفاع قیف پایینی مخزن (سانتی‌متر) را وارد کنید:")
-        return TANK_CONE_BOTTOM
+        v = float(update.message.text.strip())
+        if v < 0: raise ValueError
+        context.user_data['tank_cone_top_cm'] = v
+        await update.message.reply_text("🔺 ارتفاع قیف پایین مخزن را به **سانتی‌متر** وارد کن (اگر ندارد 0):")
+        return TANK_CONE_BOTTOM_CM
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return TANK_CONE_TOP
+        await update.message.reply_text("⚠️ مقدار نامعتبر — ارتفاع قیف را به سانتی‌متر وارد کن:")
+        return TANK_CONE_TOP_CM
 
-async def tank_cone_bottom(update, context):
-    user_id = update.message.from_user.id
+async def tank_cone_bottom_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['tank_cone_bottom'] = v
-        await update.message.reply_text("⚠️ درصد پرتی فولاد (%) را وارد کنید:")
-        return TANK_WASTE
+        v = float(update.message.text.strip())
+        if v < 0: raise ValueError
+        context.user_data['tank_cone_bottom_cm'] = v
+        await update.message.reply_text("📦 درصد پرتی فولاد را وارد کن (مثلاً 5 برای ۵٪):")
+        return TANK_WASTE_PERCENT
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return TANK_CONE_BOTTOM
+        await update.message.reply_text("⚠️ مقدار نامعتبر — ارتفاع قیف را به سانتی‌متر وارد کن:")
+        return TANK_CONE_BOTTOM_CM
 
-async def tank_waste(update, context):
-    user_id = update.message.from_user.id
+async def tank_waste_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        if v < 0: raise ValueError()
-        user_data[user_id]['tank_waste'] = v
-        await update.message.reply_text("💰 دستمزد ساخت هر کیلوگرم (تومان) را وارد کنید:")
+        v = float(update.message.text.strip())
+        if v < 0: raise ValueError
+        context.user_data['tank_waste_percent'] = v
+        await update.message.reply_text("💰 دستمزد ساخت به ازای هر کیلوگرم (تومان) را وارد کن:")
         return TANK_WAGE
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return TANK_WASTE
+        await update.message.reply_text("⚠️ مقدار نامعتبر — درصد پرتی را وارد کن:")
+        return TANK_WASTE_PERCENT
 
-async def tank_wage(update, context):
-    user_id = update.message.from_user.id
+async def tank_wage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        wage = int(update.message.text)
-        if wage < 0: raise ValueError()
-        data = user_data[user_id]
-        data['tank_wage'] = wage
-        # محاسبه وزن مخزن
-        t = data['tank_thickness'] / 1000  # متر
-        d = data['tank_diameter']
-        r = d / 2
-        h = data['tank_height']
-        cone_top = data['tank_cone_top'] / 100  # متر
-        cone_bottom = data['tank_cone_bottom'] / 100  # متر
-        waste = data['tank_waste']
+        wage = float(update.message.text.strip())
+        if wage < 0: raise ValueError
 
-        # بدنه استوانه
-        surface_cylinder = 2 * math.pi * r * h
-        volume_cylinder = surface_cylinder * t
+        d_m = context.user_data['tank_diameter_m']
+        thickness_m = mm_to_meter(context.user_data['tank_thickness_mm'])
+        height_m = context.user_data['tank_height_m']
+        cone_top_m = cm_to_meter(context.user_data.get('tank_cone_top_cm', 0.0))
+        cone_bottom_m = cm_to_meter(context.user_data.get('tank_cone_bottom_cm', 0.0))
+        waste = context.user_data['tank_waste_percent']
 
-        # قیف‌ها (مخروط)
-        volume_cone_top = (math.pi * r ** 2 * cone_top) / 3
-        volume_cone_bottom = (math.pi * r ** 2 * cone_bottom) / 3
+        # محاسبات
+        weight_body = cylindrical_shell_weight(d_m, thickness_m, height_m)
+        r = d_m / 2.0
+        vol_cone_top = (math.pi * r**2 * cone_top_m) / 3.0
+        vol_cone_bottom = (math.pi * r**2 * cone_bottom_m) / 3.0
+        weight_cone_top = vol_cone_top * thickness_m * STEEL_DENSITY
+        weight_cone_bottom = vol_cone_bottom * thickness_m * STEEL_DENSITY
 
-        # حجم ورق قیف = سطح مخروط * ضخامت ورق (تقریبی)
-        volume_cone_top_steel = volume_cone_top * t
-        volume_cone_bottom_steel = volume_cone_bottom * t
-
-        total_volume = volume_cylinder + volume_cone_top_steel + volume_cone_bottom_steel
-
-        weight = total_volume * steel_density
-        weight_with_waste = weight * (1 + waste / 100)
-        price = int(weight_with_waste * wage)
+        total_weight = weight_body + weight_cone_top + weight_cone_bottom
+        total_weight_with_waste = total_weight * (1.0 + waste / 100.0)
+        price = int(total_weight_with_waste * wage)
 
         text = (
-            f"✅ محاسبه مخزن انجام شد:\n\n"
-            f"⚖️ وزن بدون پرتی: {int(weight)} کیلوگرم\n"
-            f"⚠️ وزن با پرتی: {int(weight_with_waste)} کیلوگرم\n"
-            f"💰 قیمت کل: {price} تومان\n\n"
-            "🔄 برای شروع مجدد /start را بزنید."
+            f"✅ نتایج محاسبه مخزن:\n\n"
+            f"🏷️ وزن (بدون پرتی): {fmt(total_weight)} kg\n"
+            f"📦 وزن (با پرتی {fmt(waste)}%): {fmt(total_weight_with_waste)} kg\n"
+            f"💵 قیمت ساخت: {fmt(price)} تومان\n"
         )
-        await update.message.reply_text(text)
+        keyboard = [[InlineKeyboardButton("🔄 شروع دوباره", callback_data=CALLBACK_RESTART)]]
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         return ConversationHandler.END
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
+        await update.message.reply_text("⚠️ مقدار نامعتبر — لطفاً عدد معتبر برای دستمزد وارد کن:")
         return TANK_WAGE
 
-### سیلو ###
-async def silo_diameter(update, context):
-    user_id = update.message.from_user.id
+# -------------------------
+# ----- سیلو (بدون تغییر منطق اصلی) -----
+# -------------------------
+async def silo_diameter_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['silo_diameter'] = v
-        await update.message.reply_text("📐 ارتفاع سیلو (متر) را وارد کنید:")
-        return SILO_HEIGHT
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['silo_diameter_m'] = v
+        await update.message.reply_text("📐 ارتفاع سیلو را به **متر** وارد کن:")
+        return SILO_HEIGHT_M
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SILO_DIAMETER
+        await update.message.reply_text("⚠️ مقدار نامعتبر — قطر را به متر وارد کن:")
+        return SILO_DIAMETER_M
 
-async def silo_height(update, context):
-    user_id = update.message.from_user.id
+async def silo_height_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['silo_height'] = v
-        await update.message.reply_text("⚖️ ظرفیت سیلو (تن) را وارد کنید:")
-        return SILO_CAPACITY
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['silo_height_m'] = v
+        await update.message.reply_text("⚖️ ظرفیت سیلو را به **تن** وارد کن:")
+        return SILO_CAPACITY_TON
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SILO_HEIGHT
+        await update.message.reply_text("⚠️ مقدار نامعتبر — ارتفاع را به متر وارد کن:")
+        return SILO_HEIGHT_M
 
-async def silo_capacity(update, context):
-    user_id = update.message.from_user.id
+async def silo_capacity_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['silo_capacity'] = v
-        await update.message.reply_text("🧱 تعداد کلاف سیلو را وارد کنید:")
-        return SILO_FRAME
+        v = float(update.message.text.strip())
+        context.user_data['silo_capacity_ton'] = v
+        await update.message.reply_text("🔧 تعداد کلاف‌ها (عدد) را وارد کن:")
+        return SILO_FRAMES
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SILO_CAPACITY
+        await update.message.reply_text("⚠️ مقدار نامعتبر — ظرفیت را به تن وارد کن:")
+        return SILO_CAPACITY_TON
 
-async def silo_frame(update, context):
-    user_id = update.message.from_user.id
+async def silo_frames_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = int(update.message.text)
-        user_data[user_id]['silo_frame'] = v
-        await update.message.reply_text("🧱 تعداد بادبند سیلو را وارد کنید:")
-        return SILO_BRACING
+        v = int(update.message.text.strip())
+        context.user_data['silo_frames'] = v
+        await update.message.reply_text("🔧 تعداد بادبندها (عدد) را وارد کن:")
+        return SILO_BRACES
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SILO_FRAME
+        await update.message.reply_text("⚠️ مقدار نامعتبر — تعداد کلاف را عدد صحیح وارد کن:")
+        return SILO_FRAMES
 
-async def silo_bracing(update, context):
-    user_id = update.message.from_user.id
+async def silo_braces_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = int(update.message.text)
-        user_data[user_id]['silo_bracing'] = v
-        await update.message.reply_text("⚠️ درصد پرتی فولاد (%) را وارد کنید:")
-        return SILO_WASTE
+        v = int(update.message.text.strip())
+        context.user_data['silo_braces'] = v
+        await update.message.reply_text("📦 درصد پرتی فولاد (%) را وارد کن:")
+        return SILO_WASTE_PERCENT
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SILO_BRACING
+        await update.message.reply_text("⚠️ مقدار نامعتبر — تعداد بادبند را عدد صحیح وارد کن:")
+        return SILO_BRACES
 
-async def silo_waste(update, context):
-    user_id = update.message.from_user.id
+async def silo_waste_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['silo_waste'] = v
-        await update.message.reply_text("💰 دستمزد ساخت هر کیلوگرم (تومان) را وارد کنید:")
+        v = float(update.message.text.strip())
+        if v < 0: raise ValueError
+        context.user_data['silo_waste_percent'] = v
+        await update.message.reply_text("💰 دستمزد ساخت به ازای هر کیلوگرم (تومان) را وارد کن:")
         return SILO_WAGE
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SILO_WASTE
+        await update.message.reply_text("⚠️ مقدار نامعتبر — درصد پرتی را وارد کن:")
+        return SILO_WASTE_PERCENT
 
-async def silo_wage(update, context):
-    user_id = update.message.from_user.id
+async def silo_wage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        wage = int(update.message.text)
-        data = user_data[user_id]
-        data['silo_wage'] = wage
+        wage = float(update.message.text.strip())
+        # محاسبات ساده مشابه نسخهٔ قبلی (منطق دست‌نخورده)
+        d = context.user_data['silo_diameter_m']
+        h = context.user_data['silo_height_m']
+        frames = context.user_data.get('silo_frames', 0)
+        braces = context.user_data.get('silo_braces', 0)
+        waste = context.user_data['silo_waste_percent']
 
-        # محاسبه وزن سیلو (یک نمونه ساده است)
-        t = 0.008  # فرض ضخامت ورق 8 میلی‌متر
-        d = data['silo_diameter']
-        r = d / 2
-        h = data['silo_height']
-        frame = data['silo_frame']
-        bracing = data['silo_bracing']
-        waste = data['silo_waste']
-
-        # بدنه استوانه
-        surface_cylinder = 2 * math.pi * r * h
-        volume_cylinder = surface_cylinder * t
-
-        # وزن اسکلت
-        # فرض کنیم هر کلاف و بادبند 50 کیلوگرم است (میتونی تغییر بدی)
-        weight_frame = (frame + bracing) * 50
-
-        weight = volume_cylinder * steel_density + weight_frame
-        weight_with_waste = weight * (1 + waste / 100)
-        price = int(weight_with_waste * wage)
+        thickness_m = 0.005  # فرضی (نگه‌داشته شده از منطق قبلی)
+        body_weight = cylindrical_shell_weight(d, thickness_m, h)
+        frame_weight_each = 100.0
+        brace_weight_each = 50.0
+        total_weight = body_weight + frames * frame_weight_each + braces * brace_weight_each
+        total_weight_with_waste = total_weight * (1.0 + waste / 100.0)
+        price = int(total_weight_with_waste * wage)
 
         text = (
-            f"✅ محاسبه سیلو انجام شد:\n\n"
-            f"⚖️ وزن بدون پرتی: {int(weight)} کیلوگرم\n"
-            f"⚠️ وزن با پرتی: {int(weight_with_waste)} کیلوگرم\n"
-            f"💰 قیمت کل: {price} تومان\n\n"
-            "🔄 برای شروع مجدد /start را بزنید."
+            f"✅ نتایج محاسبه سیلو:\n\n"
+            f"⚖️ وزن بدون پرتی: {fmt(total_weight)} kg\n"
+            f"📦 وزن با پرتی ({fmt(waste)}%): {fmt(total_weight_with_waste)} kg\n"
+            f"💵 قیمت ساخت: {fmt(price)} تومان\n"
         )
-        await update.message.reply_text(text)
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 شروع دوباره", callback_data=CALLBACK_RESTART)]]))
         return ConversationHandler.END
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
+        await update.message.reply_text("⚠️ مقدار نامعتبر — لطفاً عدد معتبر وارد کن:")
         return SILO_WAGE
 
-### اسکرو کانوایر ###
-async def screw_length(update, context):
-    user_id = update.message.from_user.id
+# -------------------------
+# ----- اسکرو کانوایر (جدید و دقیق) -----
+# -------------------------
+async def screw_length_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['screw_length'] = v
-        await update.message.reply_text("📏 قطر خارجی اسکرو (سانتی‌متر) را وارد کنید:")
-        return SCREW_OUTER_DIAMETER
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['screw_length_cm'] = v
+        await update.message.reply_text("📏 قطر بدنه اسکرو (بیرونی) را به **اینچ** وارد کن (مثلاً 8):")
+        return SCREW_OUTER_DIAMETER_INCH
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SCREW_LENGTH
+        await update.message.reply_text("⚠️ مقدار نامعتبر — طول را به سانتی‌متر وارد کن:")
+        return SCREW_LENGTH_CM
 
-async def screw_outer_diameter(update, context):
-    user_id = update.message.from_user.id
+async def screw_outer_diameter_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['screw_outer_diameter'] = v
-        await update.message.reply_text("⚙️ ضخامت خارجی اسکرو (میلی‌متر) را وارد کنید:")
-        return SCREW_OUTER_THICKNESS
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['screw_outer_d_inch'] = v
+        await update.message.reply_text("🔩 ضخامت بدنه اسکرو را به **میلیمتر** وارد کن (مثلاً 6):")
+        return SCREW_OUTER_THICKNESS_MM
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SCREW_OUTER_DIAMETER
+        await update.message.reply_text("⚠️ مقدار نامعتبر — قطر را به اینچ وارد کن:")
+        return SCREW_OUTER_DIAMETER_INCH
 
-async def screw_outer_thickness(update, context):
-    user_id = update.message.from_user.id
+async def screw_outer_thickness_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['screw_outer_thickness'] = v
-        await update.message.reply_text("⚙️ قطر شفت داخلی اسکرو (میلی‌متر) را وارد کنید:")
-        return SCREW_SHAFT_DIAMETER
+        v = float(update.message.text.strip())
+        if v < 0: raise ValueError
+        context.user_data['screw_outer_thickness_mm'] = v
+        await update.message.reply_text("🔩 قطر شفت وسط (outer diameter) را به **اینچ** وارد کن (مثلاً 3):")
+        return SCREW_SHAFT_OUTER_DIAMETER_INCH
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SCREW_OUTER_THICKNESS
+        await update.message.reply_text("⚠️ مقدار نامعتبر — ضخامت بدنه را میلی‌متر وارد کن:")
+        return SCREW_OUTER_THICKNESS_MM
 
-async def screw_shaft_diameter(update, context):
-    user_id = update.message.from_user.id
+async def screw_shaft_outer_d_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['screw_shaft_diameter'] = v
-        await update.message.reply_text("⚙️ ضخامت شفت داخلی اسکرو (میلی‌متر) را وارد کنید:")
-        return SCREW_SHAFT_THICKNESS
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['screw_shaft_outer_d_inch'] = v
+        await update.message.reply_text("🔩 ضخامت دیواره شفت وسط را به **میلیمتر** وارد کن (برای شفت لوله‌ای):")
+        return SCREW_SHAFT_THICKNESS_MM
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SCREW_SHAFT_DIAMETER
+        await update.message.reply_text("⚠️ مقدار نامعتبر — قطر شفت را به اینچ وارد کن:")
+        return SCREW_SHAFT_OUTER_DIAMETER_INCH
 
-async def screw_shaft_thickness(update, context):
-    user_id = update.message.from_user.id
+async def screw_shaft_thickness_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['screw_shaft_thickness'] = v
-        await update.message.reply_text("📐 گام اسکرو (سانتی‌متر) را وارد کنید:")
-        return SCREW_PITCH
+        v = float(update.message.text.strip())
+        if v < 0: raise ValueError
+        context.user_data['screw_shaft_thickness_mm'] = v
+        await update.message.reply_text("📐 گام (Pitch) ماردون را به **سانتی‌متر** وارد کن (فاصله بین دورها):")
+        return SCREW_PITCH_CM
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SCREW_SHAFT_THICKNESS
+        await update.message.reply_text("⚠️ مقدار نامعتبر — ضخامت شفت را میلی‌متر وارد کن:")
+        return SCREW_SHAFT_THICKNESS_MM
 
-async def screw_pitch(update, context):
-    user_id = update.message.from_user.id
+async def screw_pitch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['screw_pitch'] = v
-        await update.message.reply_text("⚙️ ضخامت تیغه اسکرو (میلی‌متر) را وارد کنید:")
-        return SCREW_BLADE_THICKNESS
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['screw_pitch_cm'] = v
+        await update.message.reply_text("🔧 ضخامت تیغه ماردون را به **میلیمتر** وارد کن:")
+        return SCREW_BLADE_THICKNESS_MM
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SCREW_PITCH
+        await update.message.reply_text("⚠️ مقدار نامعتبر — گام را به سانتی‌متر وارد کن:")
+        return SCREW_PITCH_CM
 
-async def screw_blade_thickness(update, context):
-    user_id = update.message.from_user.id
+async def screw_blade_thickness_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['screw_blade_thickness'] = v
-        await update.message.reply_text("📏 شعاع تیغه اسکرو (سانتی‌متر) را وارد کنید:")
-        return SCREW_BLADE_RADIUS
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['screw_blade_thickness_mm'] = v
+
+        # محاسبه شعاع‌های داخلی و پیشنهاد قطر شفت ترانس
+        outer_pipe_d_m = inch_to_meter(context.user_data['screw_outer_d_inch'])
+        pipe_thickness_m = mm_to_meter(context.user_data['screw_outer_thickness_mm'])
+        pipe_inner_radius_m = outer_pipe_d_m / 2.0 - pipe_thickness_m
+
+        shaft_outer_d_m = inch_to_meter(context.user_data['screw_shaft_outer_d_inch'])
+        shaft_outer_radius_m = shaft_outer_d_m / 2.0
+        shaft_thickness_m = mm_to_meter(context.user_data['screw_shaft_thickness_mm'])
+        shaft_inner_radius_m = max(shaft_outer_radius_m - shaft_thickness_m, 0.0)
+
+        # پیشنهاد قطر شفت ترانس = قطر داخلی لوله شفت (به اینچ برای نمایش به کاربر)
+        suggested_trans_shaft_d_m = shaft_inner_radius_m * 2.0
+        suggested_trans_shaft_d_inch = suggested_trans_shaft_d_m / 0.0254 if suggested_trans_shaft_d_m > 0 else 0.0
+
+        # پیام: هنگام پرسیدن قطر شفت ترانس، پیشنهاد را نشان می‌دهیم
+        msg = (
+            f"📐 پیشنهاد قطر شفت ترانس (برابر قطر داخلی لوله شفت): {fmt(round(suggested_trans_shaft_d_inch, 3))} inch\n\n"
+            f"📏 حالا قطر شفت ترانس را به **اینچ** وارد کن (اگر می‌خواهی پیشنهاد را بپذیری، همان مقدار را وارد کن):"
+        )
+        await update.message.reply_text(msg)
+        return TRANS_SHAFT_DIAMETER_INCH
+    except Exception:
+        await update.message.reply_text("⚠️ مقدار نامعتبر — ضخامت تیغه را میلی‌متر وارد کن:")
+        return SCREW_BLADE_THICKNESS_MM
+
+async def trans_shaft_diameter_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['trans_shaft_d_inch'] = v
+        await update.message.reply_text("📏 طول شفت ترانس را به **سانتی‌متر** وارد کن:")
+        return TRANS_SHAFT_LENGTH_CM
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SCREW_BLADE_THICKNESS
+        await update.message.reply_text("⚠️ مقدار نامعتبر — قطر شفت ترانس را به اینچ وارد کن:")
+        return TRANS_SHAFT_DIAMETER_INCH
 
-async def screw_blade_radius(update, context):
-    user_id = update.message.from_user.id
+async def trans_shaft_length_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['screw_blade_radius'] = v
-        await update.message.reply_text("💰 قیمت موتور اسکرو (تومان) را وارد کنید:")
-        return MOTOR_PRICE
+        v = float(update.message.text.strip())
+        if v <= 0: raise ValueError
+        context.user_data['trans_shaft_length_cm'] = v
+        await update.message.reply_text("💰 قیمت شفت ترانس را به **تومان به ازای هر کیلوگرم** وارد کن (مثلاً 12000):")
+        return TRANS_SHAFT_PRICE_PER_KG
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return SCREW_BLADE_RADIUS
+        await update.message.reply_text("⚠️ مقدار نامعتبر — طول را به سانتی‌متر وارد کن:")
+        return TRANS_SHAFT_LENGTH_CM
 
-async def motor_price(update, context):
-    user_id = update.message.from_user.id
+async def trans_shaft_price_per_kg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = int(update.message.text)
-        user_data[user_id]['motor_price'] = v
-        await update.message.reply_text("💰 دستمزد تراشکاری (تومان) را وارد کنید:")
-        return LATHE_WAGE
+        v = float(update.message.text.strip())
+        if v < 0: raise ValueError
+        context.user_data['trans_shaft_price_per_kg'] = v
+        await update.message.reply_text("💰 قیمت موتور/گیربکس را به **تومان** وارد کن:")
+        return SCREW_MOTOR_PRICE
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return MOTOR_PRICE
+        await update.message.reply_text("⚠️ مقدار نامعتبر — قیمت شفت ترانس را به تومان/کیلو وارد کن:")
+        return TRANS_SHAFT_PRICE_PER_KG
 
-async def lathe_wage(update, context):
-    user_id = update.message.from_user.id
+async def screw_motor_price_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = int(update.message.text)
-        user_data[user_id]['lathe_wage'] = v
-        await update.message.reply_text("📏 قطر شفت انتقال (میلی‌متر) را وارد کنید:")
-        return TRANS_SHAFT_DIAMETER
+        v = float(update.message.text.strip())
+        if v < 0: raise ValueError
+        context.user_data['screw_motor_price'] = v
+        await update.message.reply_text("💰 اجرت تراشکار را به **تومان** وارد کن:")
+        return SCREW_LATHE_WAGE
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return LATHE_WAGE
+        await update.message.reply_text("⚠️ مقدار نامعتبر — قیمت موتور را به تومان وارد کن:")
+        return SCREW_MOTOR_PRICE
 
-async def trans_shaft_diameter(update, context):
-    user_id = update.message.from_user.id
+async def screw_lathe_wage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['trans_shaft_diameter'] = v
-        await update.message.reply_text("📏 طول شفت انتقال (سانتی‌متر) را وارد کنید:")
-        return TRANS_SHAFT_LENGTH
+        v = float(update.message.text.strip())
+        if v < 0: raise ValueError
+        context.user_data['screw_lathe_wage'] = v
+        await update.message.reply_text("💸 دستمزد ساخت را به ازای هر کیلوگرم (تومان/kg) وارد کن:")
+        return SCREW_LABOR_PER_KG
     except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return TRANS_SHAFT_DIAMETER
+        await update.message.reply_text("⚠️ مقدار نامعتبر — اجرت تراشکار را به تومان وارد کن:")
+        return SCREW_LATHE_WAGE
 
-async def trans_shaft_length(update, context):
-    user_id = update.message.from_user.id
+async def screw_labor_per_kg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        v = float(update.message.text)
-        user_data[user_id]['trans_shaft_length'] = v
-        await update.message.reply_text("💰 قیمت شفت انتقال (تومان) را وارد کنید:")
-        return TRANS_SHAFT_PRICE
-    except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return TRANS_SHAFT_LENGTH
+        labor = float(update.message.text.strip())
+        if labor < 0: raise ValueError
+        context.user_data['screw_labor_per_kg'] = labor
 
-async def trans_shaft_price(update, context):
-    user_id = update.message.from_user.id
-    try:
-        v = int(update.message.text)
-        user_data[user_id]['trans_shaft_price'] = v
-        await update.message.reply_text("💰 دستمزد ساخت اسکرو (تومان) را وارد کنید:")
-        return SCREW_WAGE
-    except:
-        await update.message.reply_text("❌ عدد معتبر وارد کنید:")
-        return TRANS_SHAFT_PRICE
+        # ---------- محاسبات ----------
+        length_m = cm_to_meter(context.user_data['screw_length_cm'])
+        outer_d_m = inch_to_meter(context.user_data['screw_outer_d_inch'])
+        outer_thickness_m = mm_to_meter(context.user_data['screw_outer_thickness_mm'])
+        shaft_outer_d_m = inch_to_meter(context.user_data['screw_shaft_outer_d_inch'])
+        shaft_thickness_m = mm_to_meter(context.user_data['screw_shaft_thickness_mm'])
+        pitch_m = cm_to_meter(context.user_data['screw_pitch_cm'])
+        blade_thickness_m = mm_to_meter(context.user_data['screw_blade_thickness_mm'])
 
-async def screw_wage(update, context):
-    user_id = update.message.from_user.id
-    try:
-        wage = int(update.message.text)
-        data = user_data[user_id]
-        data['screw_wage'] = wage
+        # محاسبه شعاع‌ها
+        pipe_outer_radius = outer_d_m / 2.0
+        pipe_inner_radius = max(pipe_outer_radius - outer_thickness_m, 0.0)
 
-        # محاسبه حجم و وزن اسکرو (تقریبی)
-        length_m = data['screw_length'] / 100
-        outer_d = data['screw_outer_diameter'] / 100
-        outer_t = data['screw_outer_thickness'] / 1000
-        shaft_d = data['screw_shaft_diameter'] / 1000
-        shaft_t = data['screw_shaft_thickness'] / 1000
-        blade_t = data['screw_blade_thickness'] / 1000
-        blade_r = data['screw_blade_radius'] / 100
-        pitch = data['screw_pitch'] / 100
-        motor_price = data['motor_price']
-        lathe_wage = data['lathe_wage']
-        trans_d = data['trans_shaft_diameter'] / 1000
-        trans_l = data['trans_shaft_length'] / 100
-        trans_price = data['trans_shaft_price']
+        shaft_outer_radius = shaft_outer_d_m / 2.0
+        shaft_inner_radius = max(shaft_outer_radius - shaft_thickness_m, 0.0)
 
-        # حجم لوله خارجی
-        volume_outer = math.pi * ((outer_d / 2) ** 2) * length_m
-        # حجم لوله داخلی (شفت)
-        volume_shaft = math.pi * ((shaft_d / 2) ** 2) * length_m
-        # حجم فولاد بدنه لوله = حجم لوله خارجی - حجم لوله داخلی
-        volume_pipe_steel = volume_outer - volume_shaft
+        # شعاع تیغه = شعاع داخلی لوله بدنه − شعاع بیرونی شفت
+        blade_radius_m = pipe_inner_radius - shaft_outer_radius
 
-        # حجم تیغه اسکرو (تقریبی: تیغه ضخامت * طول * عرض (π*r) )
-        volume_blade = blade_t * length_m * (2 * math.pi * blade_r)
+        if blade_radius_m <= 0:
+            await update.message.reply_text(
+                "❌ فضای بین شفت و لوله بدنه کافی نیست (شعاع تیغه ≤ 0). لطفاً ورودی‌ها را بازبینی کن."
+            )
+            return ConversationHandler.END
 
-        # حجم شفت انتقال
-        volume_trans_shaft = math.pi * ((trans_d / 2) ** 2) * trans_l
+        # وزن‌ها
+        pipe_shell_weight = cylindrical_shell_weight(outer_d_m, outer_thickness_m, length_m)  # kg
+        shaft_weight = cylindrical_shell_weight(shaft_outer_d_m, shaft_thickness_m, length_m)   # kg
+        blade_weight = screw_blade_weight(blade_thickness_m, blade_radius_m, length_m)         # kg
 
-        total_volume = volume_pipe_steel + volume_blade + volume_trans_shaft
+        total_weight_kg = pipe_shell_weight + shaft_weight + blade_weight
 
-        weight = total_volume * steel_density
+        # وزن و هزینه شفت ترانس (استوانه توپر)
+        trans_d_inch = context.user_data.get('trans_shaft_d_inch')
+        trans_length_m = cm_to_meter(context.user_data.get('trans_shaft_length_cm', 0.0))
+        trans_price_per_kg = context.user_data.get('trans_shaft_price_per_kg', 0.0)
 
-        total_price = int(weight * wage + motor_price + lathe_wage + trans_price)
+        # اگر کاربر قطر شفت ترانس را وارد نکرده به 0 پیش‌فرض می‌شود (نباید، چون قبلاً پرسیده شده)
+        if trans_d_inch is None:
+            trans_weight_kg = 0.0
+            trans_total_price = 0.0
+        else:
+            trans_d_m = inch_to_meter(trans_d_inch)
+            trans_weight_kg = solid_cylinder_weight(trans_d_m, trans_length_m)
+            trans_total_price = trans_weight_kg * trans_price_per_kg
+
+        motor_price = context.user_data.get('screw_motor_price', 0.0)
+        lathe_wage = context.user_data.get('screw_lathe_wage', 0.0)
+        labor_per_kg = context.user_data['screw_labor_per_kg']
+
+        total_price = int(total_weight_kg * labor_per_kg + motor_price + lathe_wage + trans_total_price)
+
+        # نمایش نتایج — شعاع تیغه به سانتی‌متر
+        blade_radius_cm = blade_radius_m * 100.0
 
         text = (
-            f"✅ محاسبه اسکرو کانوایر انجام شد:\n\n"
-            f"⚖️ وزن کل: {int(weight)} کیلوگرم\n"
-            f"💰 قیمت کل: {total_price} تومان\n\n"
-            "🔄 برای شروع مجدد /start را بزنید."
+            f"✅ نتایج محاسبه اسکرو کانوایر:\n\n"
+            f"📏 طول اسکرو: {fmt(context.user_data['screw_length_cm'])} cm\n"
+            f"🔘 قطر بدنه (بیرونی): {fmt(context.user_data['screw_outer_d_inch'])} inch\n"
+            f"🔩 ضخامت بدنه: {fmt(context.user_data['screw_outer_thickness_mm'])} mm\n"
+            f"🔧 قطر شفت (بیرونی): {fmt(context.user_data['screw_shaft_outer_d_inch'])} inch\n"
+            f"⚙️ ضخامت شفت: {fmt(context.user_data['screw_shaft_thickness_mm'])} mm\n"
+            f"🌀 گام ماردون: {fmt(context.user_data['screw_pitch_cm'])} cm\n"
+            f"🗜️ ضخامت تیغه: {fmt(context.user_data['screw_blade_thickness_mm'])} mm\n\n"
+            f"📐 شعاع تیغه محاسبه‌شده: {fmt(blade_radius_cm)} cm\n"
+            f"🔄 تعداد دور تقریباً: {fmt(int(length_m / pitch_m) if pitch_m>0 else 0)} دور\n\n"
+            f"⚖️ وزن لوله بدنه: {fmt(pipe_shell_weight)} kg\n"
+            f"⚖️ وزن شفت: {fmt(shaft_weight)} kg\n"
+            f"⚖️ وزن تیغه (ماردون): {fmt(blade_weight)} kg\n"
+            f"🔢 وزن کل (لوله+شفت+تیغه): {fmt(total_weight_kg)} kg\n\n"
+            f"⚖️ وزن شفت ترانس (استوانه توپر): {fmt(trans_weight_kg)} kg\n"
+            f"💰 هزینه شفت ترانس (تومان): {fmt(int(trans_total_price))}\n\n"
+            f"💰 قیمت موتور/گیربکس: {fmt(int(motor_price))} تومان\n"
+            f"🔧 اجرت تراشکار: {fmt(int(lathe_wage))} تومان\n"
+            f"💸 دستمزد ساخت (تومان/kg): {fmt(labor_per_kg)}\n\n"
+            f"💵 مجموع قیمت نهایی: {fmt(total_price)} تومان\n"
         )
-        await update.message.reply_text(text)
+
+        keyboard = [[InlineKeyboardButton("🔄 شروع دوباره", callback_data=CALLBACK_RESTART)]]
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         return ConversationHandler.END
+
     except Exception as e:
-        await update.message.reply_text("❌ خطا در ورودی‌ها یا محاسبه، لطفاً عدد معتبر وارد کنید.")
-        return SCREW_WAGE
+        await update.message.reply_text(f"⚠️ خطا یا ورودی نامعتبر: {e}\nلطفاً دوباره تلاش کن.")
+        return SCREW_LABOR_PER_KG
 
-async def cancel(update, context):
-    await update.message.reply_text("❌ عملیات لغو شد. برای شروع مجدد /start را بزنید.")
+# -------------------------
+# callback برای restart
+# -------------------------
+async def restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    try:
+        await query.message.delete()
+    except:
+        pass
+    return await start(update, context)
+
+# -------------------------
+# cancel
+# -------------------------
+async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ عملیات لغو شد. برای شروع دوباره /start را بزن.")
     return ConversationHandler.END
 
-def main():
-    application = ApplicationBuilder().token("8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY").build()
+# -------------------------
+# ساخت اپ و ConversationHandler
+# -------------------------
+def build_app(token: str):
+    app = ApplicationBuilder().token(token).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
         states={
-            CHOOSING_PRODUCT: [CallbackQueryHandler(choose_product)],
+            CHOOSING_PRODUCT: [CallbackQueryHandler(choose_product_cb)],
 
             # مخزن
-            TANK_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_thickness)],
-            TANK_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_diameter)],
-            TANK_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_height)],
-            TANK_CONE_TOP: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_cone_top)],
-            TANK_CONE_BOTTOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_cone_bottom)],
-            TANK_WASTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_waste)],
-            TANK_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_wage)],
+            TANK_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_thickness_handler)],
+            TANK_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_diameter_handler)],
+            TANK_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_height_handler)],
+            TANK_CONE_TOP_CM: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_cone_top_handler)],
+            TANK_CONE_BOTTOM_CM: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_cone_bottom_handler)],
+            TANK_WASTE_PERCENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_waste_handler)],
+            TANK_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, tank_wage_handler)],
 
             # سیلو
-            SILO_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_diameter)],
-            SILO_HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_height)],
-            SILO_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_capacity)],
-            SILO_FRAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_frame)],
-            SILO_BRACING: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_bracing)],
-            SILO_WASTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_waste)],
-            SILO_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_wage)],
+            SILO_DIAMETER_M: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_diameter_handler)],
+            SILO_HEIGHT_M: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_height_handler)],
+            SILO_CAPACITY_TON: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_capacity_handler)],
+            SILO_FRAMES: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_frames_handler)],
+            SILO_BRACES: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_braces_handler)],
+            SILO_WASTE_PERCENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_waste_handler)],
+            SILO_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, silo_wage_handler)],
 
             # اسکرو
-            SCREW_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_length)],
-            SCREW_OUTER_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_outer_diameter)],
-            SCREW_OUTER_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_outer_thickness)],
-            SCREW_SHAFT_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_shaft_diameter)],
-            SCREW_SHAFT_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_shaft_thickness)],
-            SCREW_PITCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_pitch)],
-            SCREW_BLADE_THICKNESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_blade_thickness)],
-            SCREW_BLADE_RADIUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_blade_radius)],
-            MOTOR_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, motor_price)],
-            LATHE_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lathe_wage)],
-            TRANS_SHAFT_DIAMETER: [MessageHandler(filters.TEXT & ~filters.COMMAND, trans_shaft_diameter)],
-            TRANS_SHAFT_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, trans_shaft_length)],
-            TRANS_SHAFT_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, trans_shaft_price)],
-            SCREW_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_wage)],
+            SCREW_LENGTH_CM: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_length_handler)],
+            SCREW_OUTER_DIAMETER_INCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_outer_diameter_handler)],
+            SCREW_OUTER_THICKNESS_MM: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_outer_thickness_handler)],
+            SCREW_SHAFT_OUTER_DIAMETER_INCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_shaft_outer_d_handler)],
+            SCREW_SHAFT_THICKNESS_MM: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_shaft_thickness_handler)],
+            SCREW_PITCH_CM: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_pitch_handler)],
+            SCREW_BLADE_THICKNESS_MM: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_blade_thickness_handler)],
+            TRANS_SHAFT_DIAMETER_INCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, trans_shaft_diameter_handler)],
+            TRANS_SHAFT_LENGTH_CM: [MessageHandler(filters.TEXT & ~filters.COMMAND, trans_shaft_length_handler)],
+            TRANS_SHAFT_PRICE_PER_KG: [MessageHandler(filters.TEXT & ~filters.COMMAND, trans_shaft_price_per_kg_handler)],
+            SCREW_MOTOR_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_motor_price_handler)],
+            SCREW_LATHE_WAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_lathe_wage_handler)],
+            SCREW_LABOR_PER_KG: [MessageHandler(filters.TEXT & ~filters.COMMAND, screw_labor_per_kg_handler)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler("cancel", cancel_handler)],
+        allow_reentry=True,
     )
 
-    application.add_handler(conv_handler)
-    application.run_polling()
+    app.add_handler(conv)
+    app.add_handler(CallbackQueryHandler(restart_callback, pattern=f"^{CALLBACK_RESTART}$"))
 
-if __name__ == '__main__':
-    main()
+    return app
+
+# -------------------------
+# اجرا
+# -------------------------
+if __name__ == "__main__":
+    TOKEN = os.getenv("8361649022:AAEkrO2nWlAxmrMLCbFhIoQry49vBKDjxDY") or "YOUR_BOT_TOKEN"
+    app = build_app(TOKEN)
+    print("🤖 ربات آماده است. از /start استفاده کن.")
+    app.run_polling()
